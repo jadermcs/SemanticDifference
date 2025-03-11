@@ -9,6 +9,7 @@ df = pd.read_json("data/dwug_sensediff.json").sample(100, random_state=42)
 df[["label"]].to_csv("truth.txt", header=False, index=False)
 
 model_name = "gpt-4o-mini"
+exp_name = "rhetorics"
 pred = []
 text = []
 correct = 0
@@ -65,9 +66,9 @@ for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
         correct += 1
     count += 1
 
-with open(f"{model_name}.txt", "w") as fout:
+with open(f"{model_name}-{exp_name}.txt", "w") as fout:
     for response in pred:
         fout.write(f"{response}\n")
-with open(f"{model_name}-full.txt", "w") as fout:
+with open(f"{model_name}-{exp_name}-full.txt", "w") as fout:
     for response in text:
         fout.write(f"{response}\n")
