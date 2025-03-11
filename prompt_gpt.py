@@ -59,6 +59,7 @@ for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
     )
 
     full_response = completion.choices[0].message.content
+    text.append(full_response)
     response = full_response.split("\n")[-1].split(":")[-1].strip()
     pred.append(response)
     if row["label"] in response:
