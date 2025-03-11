@@ -6,7 +6,8 @@ from tqdm import tqdm
 client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
 
 df = pd.read_json("data/dwug_sensediff.json").sample(100, random_state=42)
-
+df[["label"]].to_csv("truth.txt", header=False, index=False)
+exit()
 
 model_name = "gpt-4o-mini"
 pred = []
