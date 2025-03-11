@@ -7,10 +7,10 @@ client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
 
 df = pd.read_json("data/dwug_sensediff.json").sample(100, random_state=42)
 df[["label"]].to_csv("truth.txt", header=False, index=False)
-exit()
 
 model_name = "gpt-4o-mini"
 pred = []
+text = []
 correct = 0
 count = 0
 for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
@@ -19,7 +19,9 @@ for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
     word = row["lemma"].split("_")[0]
     prompt = f"""
     Given two different sentences your task is to determine if a word has a identical
-    or a different meaning between usages. After thinking give, the answer in the
+    or a different meaning between usages. For this task use zeugma, join both senteces
+    by the same word and if the zeugma preserves the same sense (doesn't sound like a bad
+    pun), they are identical, otherwise they are differente. After thinking give, the answer in the
     last line of your response.
     Examples:
 
@@ -56,7 +58,8 @@ for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
         messages=data
     )
 
-    response = completion.choices[0].message.content.split("\n")[-1].split(":")[-1]
+    full_response = completion.choices[0].message.content
+    response = full_response.split("\n")[-1].split(":")[-1].strip()
     pred.append(response)
     if row["label"] in response:
         correct += 1
@@ -64,4 +67,7 @@ for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
 
 with open(f"{model_name}.txt", "w") as fout:
     for response in pred:
+        fout.write(f"{response}\n")
+with open(f"{model_name}-full.txt", "w") as fout:
+    for response in text:
         fout.write(f"{response}\n")
