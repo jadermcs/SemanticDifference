@@ -1,36 +1,8 @@
 import json
-import sqlite3
-import re
 import gzip
-import datetime
-from collections import defaultdict
+import pandas as pd
 from tqdm import tqdm
 from nltk.corpus import wordnet as wn
-
-
-def get_omsti(cursor, counter):
-    with gzip.open("data/one_million.json.gz", "r") as fin:
-        data = json.load(fin)
-        print("Getting one_million data.")
-        for instance in tqdm(data):
-            key = instance["sense_keys"][0]
-            lemma = instance["sense_keys"][0].split("%")[0]
-            if counter[key] > 2:
-                continue
-            counter[key] += 1
-            instance_data = (
-                key,
-                lemma,
-                instance["context"].replace("\n", " "),
-                "one_million"
-            )
-            if lemma not in instance["context"]:
-                continue
-            cursor.execute("""
-            INSERT INTO INSTANCES
-            (SENSE_KEY, LEMMA, USAGE, ORIGIN)
-            VALUES (?, ?, ?, ?)
-            """, instance_data)
 
 
 def synset_to_sense_key(synset):
@@ -50,7 +22,8 @@ def synset_to_sense_key(synset):
     return sense_keys
 
 
-def get_semcor(cursor, counter):
+def main():
+    entries = []
     with gzip.open("data/semcor_en.jsonl.gz", "r") as fin:
         data = json.load(fin)
         print("Getting semcor data.")
@@ -63,128 +36,35 @@ def get_semcor(cursor, counter):
                 if counter[key] > 2:
                     continue
                 counter[key] += 1
-                instance_data = (
-                    key,
-                    item["lemma"],
-                    item["text"].strip(),
-                    "semcor"
-                )
-                cursor.execute("""
-                INSERT INTO INSTANCES
-                (SENSE_KEY, LEMMA, USAGE, ORIGIN)
-                VALUES (?, ?, ?, ?)
-                """, instance_data)
+                instance_data = {
+                        "SENSE_KEY": key,
+                        "LEMMA": item["lemma"],
+                        "USAGE": item["text"].strip(),
+                        "POS": 
+                }
+                entries.append(instance_data)
+    df = pd.DataFrame(entries)
+    merged = pd.merge(df, df, on="name")
+    filterm = (
+        (merged["POS_x"] == merged["POS_y"])
+        & (merged["SENSE_x"] <= merged["SENSE_y"])
+        & (merged["USAGE_x"] != merged["USAGE_y"])
+    )
 
+    merged = merged[filterm]
 
-def get_fews(cursor, counter):
-    with gzip.open("data/fews.jsonl.gz", "r") as fin:
-        data = json.load(fin)
-        print("Getting fews data.")
-        for item in tqdm(data):
-            key = item["key"]
-            if counter[key] > 2:
-                continue
-            counter[key] += 1
-            instance_data = (
-                key,
-                item["lemma"],
-                re.sub(r"</?WSD>", "", item["usage"]),
-                "fews"
-            )
-            cursor.execute("""
-            INSERT INTO INSTANCES
-            (SENSE_KEY, LEMMA, USAGE, ORIGIN)
-            VALUES (?, ?, ?, ?)
-            """, instance_data)
+    merged["POS"] = merged["POS_x"]
 
+    merged["LABEL"] = "identical"
+    merged.loc[merged["SENSE_x"] != merged["SENSE_y"], "LABEL"] = "different"
 
-def get_masc(cursor, counter):
-    with gzip.open("data/masc.json.gz", "r") as fin:
-        data = json.load(fin)
-        print("Getting masc data.")
-        for item in tqdm(data):
-            key = item["sense_key"]
-            if counter[key] > 2:
-                continue
-            counter[key] += 1
-            instance_data = (
-                key,
-                item["sense_key"].split("%")[0].split(";")[0],
-                item["usage"],
-                "masc"
-            )
-            cursor.execute("""
-            INSERT INTO INSTANCES
-            (SENSE_KEY, LEMMA, USAGE, ORIGIN)
-            VALUES (?, ?, ?, ?)
-            """, instance_data)
+    df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
+    df = df.dropna()
+
+    filtered = df["LEMMA"] <= "j"
+    df[filtered].to_json("data/fews.train.json", orient="records", indent=2)
+    df[~filtered].to_json("data/fews.test.json", orient="records", indent=2)
 
 
 if __name__ == "__main__":
-    start_time = datetime.datetime.now()
-    print(f"Start Time: {start_time}")
-
-    conn = sqlite3.connect("usage.db")
-    cursor = conn.cursor()
-
-    cursor.execute("DROP TABLE IF EXISTS INSTANCES")
-    cursor.execute("""
-        CREATE TABLE INSTANCES (
-            ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            SENSE_KEY TEXT,
-            LEMMA TEXT,
-            USAGE TEXT,
-            ORIGIN TEXT
-        )
-    """)
-    counter = defaultdict(int)
-    get_semcor(cursor, counter)
-    print("In db data:",
-          cursor.execute("SELECT COUNT(*) FROM INSTANCES").fetchone())
-    get_masc(cursor, counter)
-    print("In db data:",
-          cursor.execute("SELECT COUNT(*) FROM INSTANCES").fetchone())
-    # get_omsti(cursor, counter)
-    # print("In db data:",
-    #       cursor.execute("SELECT COUNT(*) FROM INSTANCES").fetchone())
-
-    # Delete instances that have a single registered sense key.
-    print("Remove entries with unique sense.")
-    cursor.execute("""
-        DELETE FROM INSTANCES
-        WHERE SENSE_KEY IN (
-            SELECT SENSE_KEY
-            FROM INSTANCES
-            GROUP BY SENSE_KEY
-            HAVING COUNT(*) = 1
-        )
-    """)
-    print("In db data:",
-          cursor.execute("SELECT COUNT(*) FROM INSTANCES").fetchone())
-
-    # Create index for fast join
-    cursor.execute(""" CREATE INDEX IDX_LEMMA ON INSTANCES(LEMMA) """)
-
-    print("Create table with pair of usages.")
-    cursor.execute("DROP TABLE IF EXISTS PAIRS")
-    cursor.execute("""
-        CREATE TABLE PAIRS AS
-        SELECT
-            t1.LEMMA AS LEMMA,
-            t1.SENSE_KEY AS SENSE_KEY_1,
-            t2.SENSE_KEY AS SENSE_KEY_2,
-            t1.USAGE AS USAGE_1,
-            t2.USAGE AS USAGE_2
-        FROM INSTANCES t1
-        JOIN INSTANCES t2
-        ON t1.LEMMA = t2.LEMMA
-        WHERE t1.ID < t2.ID
-    """)
-    print("In db data:",
-          cursor.execute("SELECT COUNT(*) FROM PAIRS").fetchone())
-
-    conn.commit()
-    conn.close()
-
-    end_time = datetime.datetime.now()
-    print(f"End Time: {end_time}")
+    main()

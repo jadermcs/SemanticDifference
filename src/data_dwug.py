@@ -49,12 +49,14 @@ def main():
             "judgment": "LABEL"
             })
 
-    judgments_mode[["lemma", "pos"]] = judgments_mode["lemma"].str.split("_", n=1, expand=True)
-    judgments_mode["pos"] = judgments_mode["pos"].apply(convert)
+    judgments_mode[["LEMMA", "POS"]] = judgments_mode["lemma"].str.split("_", n=1, expand=True)
+    judgments_mode["POS"] = judgments_mode["POS"].apply(convert)
+    df = judgments_mode[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
+    df = df.dropna()
 
-    filtered = judgments_mode["lemma"] <= "j"
-    judgments_mode[filtered].to_json("data/dwug.train.json", orient="records", indent=2)
-    judgments_mode[~filtered].to_json("data/dwug.test.json", orient="records", indent=2)
+    filtered = df["LEMMA"] <= "j"
+    df[filtered].to_json("data/dwug.train.json", orient="records", indent=2)
+    df[~filtered].to_json("data/dwug.test.json", orient="records", indent=2)
 
 
 if __name__ == "__main__":
