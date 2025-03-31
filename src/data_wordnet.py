@@ -18,35 +18,40 @@ def convert(pos):
     return pos
 
 
-data = []
-for k in wordnet.all_eng_synsets():
-    for synset in k.lemmas():
-        sense = k.name()
-        name = synset.name()
-        pos = convert(k.pos())
-        usages = [e for e in k.examples() if name in e]
-        for usage in usages:
-            data.append({"name": name, "sense": sense,
-                        "usage": usage, "pos": pos})
+def main():
+    data = []
+    for k in wordnet.all_eng_synsets():
+        for synset in k.lemmas():
+            sense = k.name()
+            name = synset.name()
+            pos = convert(k.pos())
+            usages = [e for e in k.examples() if name in e]
+            for usage in usages:
+                data.append({"LEMMA": name, "SENSE_KEY": sense,
+                            "USAGE": usage, "POS": pos})
 
-df = pd.DataFrame(data)
+    df = pd.DataFrame(data)
 
-merged = pd.merge(df, df, on="name")
+    merged = pd.merge(df, df, on="name")
 
-filterm = (merged["pos_x"] == merged["pos_y"]) & (
-    merged["sense_x"] <= merged["sense_y"]) & (
-    merged["usage_x"] != merged["usage_y"])
+    filterm = (merged["POS_x"] == merged["POS_y"]) & (
+        merged["SENSE_x"] <= merged["SENSE_y"]) & (
+        merged["USAGE_x"] != merged["USAGE_y"])
 
-merged = merged[filterm]
+    merged = merged[filterm]
 
-merged["pos"] = merged["pos_x"]
+    merged["POS"] = merged["POS_x"]
 
-merged["label"] = "identical"
-merged.loc[merged["sense_x"] != merged["sense_y"], "label"] = "different"
+    merged["LABEL"] = "identical"
+    merged.loc[merged["SENSE_x"] != merged["SENSE_y"], "LABEL"] = "different"
 
-df = merged[["name", "usage_x", "usage_y", "label", "pos"]]
-df = df.dropna()
+    df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
+    df = df.dropna()
 
-filtered = df["name"] <= "j"
-df[filtered].to_json("data/wordnet.train.json", orient="records", indent=2)
-df[~filtered].to_json("data/wordnet.test.json", orient="records", indent=2)
+    filtered = df["LEMMA"] <= "j"
+    df[filtered].to_json("data/wordnet.train.json", orient="records", indent=2)
+    df[~filtered].to_json("data/wordnet.test.json", orient="records", indent=2)
+
+
+if __name__ == "__main__":
+    main()
