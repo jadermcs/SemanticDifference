@@ -12,13 +12,14 @@ def convert(pos):
     elif pos == "r":
         pos = "adverb"
     elif pos == "s":
-        pos = "adverb (s)"
+        pos = "adverb"
     else:
         raise "error"
     return pos
 
 
 def main():
+    print("Getting wordnet data.")
     data = []
     for k in wordnet.all_eng_synsets():
         for synset in k.lemmas():
@@ -32,10 +33,10 @@ def main():
 
     df = pd.DataFrame(data)
 
-    merged = pd.merge(df, df, on="name")
+    merged = pd.merge(df, df, on="LEMMA")
 
     filterm = (merged["POS_x"] == merged["POS_y"]) & (
-        merged["SENSE_x"] <= merged["SENSE_y"]) & (
+        merged["SENSE_KEY_x"] <= merged["SENSE_KEY_y"]) & (
         merged["USAGE_x"] != merged["USAGE_y"])
 
     merged = merged[filterm]
@@ -43,7 +44,7 @@ def main():
     merged["POS"] = merged["POS_x"]
 
     merged["LABEL"] = "identical"
-    merged.loc[merged["SENSE_x"] != merged["SENSE_y"], "LABEL"] = "different"
+    merged.loc[merged["SENSE_KEY_x"] != merged["SENSE_KEY_y"], "LABEL"] = "different"
 
     df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
     df = df.dropna()

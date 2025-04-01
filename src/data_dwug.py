@@ -24,6 +24,7 @@ def convert(pos):
 
 
 def main():
+    print("Getting masc data.")
     uses = []
     for file in glob("dwug_en_resampled/data/*/uses.csv"):
         uses.append(pd.read_csv(file, sep="\t"))

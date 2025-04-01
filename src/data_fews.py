@@ -6,10 +6,10 @@ from tqdm import tqdm
 
 
 def main():
+    print("Getting fews data.")
     entries = []
-    with gzip.open("data/fews.jsonl.gz", "r") as fin:
+    with gzip.open("data/fews.json.gz", "r") as fin:
         data = json.load(fin)
-        print("Getting fews data.")
         for item in tqdm(data):
             key = item["key"]
             instance_data = {
@@ -20,9 +20,9 @@ def main():
             }
             entries.append(instance_data)
     df = pd.DataFrame(entries)
-    merged = pd.merge(df, df, on="name")
+    merged = pd.merge(df, df, on="LEMMA")
     filterm = (merged["POS_x"] == merged["POS_y"]) & (
-        merged["SENSE_x"] <= merged["SENSE_y"]) & (
+        merged["SENSE_KEY_x"] <= merged["SENSE_KEY_y"]) & (
         merged["USAGE_x"] != merged["USAGE_y"])
 
     merged = merged[filterm]
@@ -30,7 +30,7 @@ def main():
     merged["POS"] = merged["POS_x"]
 
     merged["LABEL"] = "identical"
-    merged.loc[merged["SENSE_x"] != merged["SENSE_y"], "LABEL"] = "different"
+    merged.loc[merged["SENSE_KEY_x"] != merged["SENSE_KEY_y"], "LABEL"] = "different"
 
     df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
     df = df.dropna()

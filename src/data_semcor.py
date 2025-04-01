@@ -2,52 +2,33 @@ import json
 import gzip
 import pandas as pd
 from tqdm import tqdm
+from data_wordnet import convert
 from nltk.corpus import wordnet as wn
 
 
-def synset_to_sense_key(synset):
-    """
-    Convert a WordNet synset to its corresponding sense keys.
-
-    Args:
-        synset (wn.Synset): A WordNet synset.
-
-    Returns:
-        list: A list of sense keys for the given synset.
-    """
-    lem_s = synset.split(".")[0]
-    synset = wn.synset(synset)
-    sense_keys = [
-            lemma.key() for lemma in synset.lemmas() if lemma.name() == lem_s]
-    return sense_keys
-
-
 def main():
+    print("Getting semcor data.")
     entries = []
-    with gzip.open("data/semcor_en.jsonl.gz", "r") as fin:
+    with gzip.open("data/semcor_en.json.gz", "r") as fin:
         data = json.load(fin)
-        print("Getting semcor data.")
         for item in tqdm(data):
             syn = [x for x in item["synsets"] if x.startswith(item["lemma"])]
             if syn:
-                key = synset_to_sense_key(syn[0])
-            if syn and key:
-                key = key[0]
-                if counter[key] > 2:
-                    continue
-                counter[key] += 1
+                synset = wn.synset(syn[0])
+                key = [lemma.key() for lemma in synset.lemmas() if lemma.name().lower().startswith(item["lemma"])]
                 instance_data = {
-                        "SENSE_KEY": key,
+                        "SENSE_KEY": key[0],
                         "LEMMA": item["lemma"],
                         "USAGE": item["text"].strip(),
-                        "POS": 
+                        "POS": convert(synset.pos())
                 }
                 entries.append(instance_data)
     df = pd.DataFrame(entries)
-    merged = pd.merge(df, df, on="name")
+    df = df.groupby("SENSE_KEY").head(3)
+    merged = pd.merge(df, df, on="LEMMA")
     filterm = (
         (merged["POS_x"] == merged["POS_y"])
-        & (merged["SENSE_x"] <= merged["SENSE_y"])
+        & (merged["SENSE_KEY_x"] <= merged["SENSE_KEY_y"])
         & (merged["USAGE_x"] != merged["USAGE_y"])
     )
 
@@ -56,14 +37,14 @@ def main():
     merged["POS"] = merged["POS_x"]
 
     merged["LABEL"] = "identical"
-    merged.loc[merged["SENSE_x"] != merged["SENSE_y"], "LABEL"] = "different"
+    merged.loc[merged["SENSE_KEY_x"] != merged["SENSE_KEY_y"], "LABEL"] = "different"
 
     df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
     df = df.dropna()
 
     filtered = df["LEMMA"] <= "j"
-    df[filtered].to_json("data/fews.train.json", orient="records", indent=2)
-    df[~filtered].to_json("data/fews.test.json", orient="records", indent=2)
+    df[filtered].to_json("data/semcor.train.json", orient="records", indent=2)
+    df[~filtered].to_json("data/semcor.test.json", orient="records", indent=2)
 
 
 if __name__ == "__main__":
