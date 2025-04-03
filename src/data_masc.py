@@ -2,7 +2,7 @@ import json
 import gzip
 import pandas as pd
 from tqdm import tqdm
-from data_wordnet import convert
+from data_wordnet import convert, get_in_context_word
 from nltk.corpus import wordnet as wn
 
 
@@ -19,14 +19,18 @@ def main():
                 lemma = lemma[0]
             except:
                 continue
-            instance_data = {
+            instance = {
                     "SENSE_KEY": key,
                     "LEMMA": lemma,
                     "USAGE": item["usage"],
                     "POS": convert(synset.pos())
             }
-            entries.append(instance_data)
+            instance["WORD"] = get_in_context_word(
+                instance["LEMMA"], instance["USAGE"]
+            )
+            entries.append(instance)
     df = pd.DataFrame(entries)
+    df = df.dropna()
     df = df.groupby("SENSE_KEY").head(3)
     merged = pd.merge(df, df, on="LEMMA")
     filterm = (
@@ -42,8 +46,8 @@ def main():
     merged["LABEL"] = "identical"
     merged.loc[merged["SENSE_KEY_x"] != merged["SENSE_KEY_y"], "LABEL"] = "different"
 
-    df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
-    df = df.dropna()
+    df = merged[["LEMMA", "WORD_x", "WORD_y",
+                 "USAGE_x", "USAGE_y", "POS", "LABEL"]]
 
     filtered = df["LEMMA"] <= "j"
     df[filtered].to_json("data/masc.train.json", orient="records", indent=2)

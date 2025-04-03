@@ -3,6 +3,7 @@ import re
 import gzip
 import pandas as pd
 from tqdm import tqdm
+from data_wordnet import get_in_context_word
 
 
 def main():
@@ -12,14 +13,18 @@ def main():
         data = json.load(fin)
         for item in tqdm(data):
             key = item["key"]
-            instance_data = {
+            instance = {
                     "SENSE_KEY": key,
                     "LEMMA": item["lemma"],
                     "USAGE": re.sub(r"</?WSD>", "", item["usage"]),
                     "POS": key.split(".")[1]
             }
-            entries.append(instance_data)
+            instance["WORD"] = get_in_context_word(
+                instance["LEMMA"], instance["USAGE"]
+            )
+            entries.append(instance)
     df = pd.DataFrame(entries)
+    df = df.dropna()
     merged = pd.merge(df, df, on="LEMMA")
     filterm = (merged["POS_x"] == merged["POS_y"]) & (
         merged["SENSE_KEY_x"] <= merged["SENSE_KEY_y"]) & (
@@ -32,8 +37,8 @@ def main():
     merged["LABEL"] = "identical"
     merged.loc[merged["SENSE_KEY_x"] != merged["SENSE_KEY_y"], "LABEL"] = "different"
 
-    df = merged[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
-    df = df.dropna()
+    df = merged[["LEMMA", "WORD_x", "WORD_y",
+                 "USAGE_x", "USAGE_y", "POS", "LABEL"]]
 
     filtered = df["LEMMA"] <= "j"
     df[filtered].to_json("data/fews.train.json", orient="records", indent=2)

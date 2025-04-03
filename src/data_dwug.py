@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 from glob import glob
+from data_wordnet import get_in_context_word
 import pandas as pd
 import numpy
 
@@ -24,7 +25,7 @@ def convert(pos):
 
 
 def main():
-    print("Getting masc data.")
+    print("Getting dwug data.")
     uses = []
     for file in glob("dwug_en_resampled/data/*/uses.csv"):
         uses.append(pd.read_csv(file, sep="\t"))
@@ -37,22 +38,29 @@ def main():
         judgments.append(pd.read_csv(file, sep="\t"))
     judgments = pd.concat(judgments)
 
-    judgments_mode = judgments.groupby(["lemma", "identifier1", "identifier2"])[
+    judgments_mode = judgments.groupby([
+        "lemma", "identifier1", "identifier2"])[
         "judgment"].agg(pd.Series.mode).reset_index()
     judgments_mode["judgment"] = judgments_mode["judgment"].apply(match)
 
     judgments_mode["identifier1"] = judgments_mode["identifier1"].apply(mapper.get)
     judgments_mode["identifier2"] = judgments_mode["identifier2"].apply(mapper.get)
 
-    judgments_mode = judgments_mode.rename(columns={
+    df = judgments_mode.rename(columns={
             "identifier1": "USAGE_x",
             "identifier2": "USAGE_y",
             "judgment": "LABEL"
-            })
+            }).dropna()
+    df[["LEMMA", "POS"]] = df["lemma"].str.split(
+        "_", n=1, expand=True)
+    df["POS"] = df["POS"].apply(convert)
+    df["WORD_x"] = df.apply(
+        lambda x: get_in_context_word(x["LEMMA"], x["USAGE_x"]), axis=1)
+    df["WORD_y"] = df.apply(
+        lambda x: get_in_context_word(x["LEMMA"], x["USAGE_y"]), axis=1)
 
-    judgments_mode[["LEMMA", "POS"]] = judgments_mode["lemma"].str.split("_", n=1, expand=True)
-    judgments_mode["POS"] = judgments_mode["POS"].apply(convert)
-    df = judgments_mode[["LEMMA", "USAGE_x", "USAGE_y", "POS", "LABEL"]]
+    df = df[["LEMMA", "WORD_x", "WORD_y",
+             "USAGE_x", "USAGE_y", "POS", "LABEL"]]
     df = df.dropna()
 
     filtered = df["LEMMA"] <= "j"
