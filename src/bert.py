@@ -9,6 +9,7 @@ tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModel.from_pretrained(model_path)
 
 for dataset in ["dwug", "semcor", "masc", "wordnet", "fews"]:
+    print("running experiments for", dataset)
     data = load_dataset("json", data_files=f"data/{dataset}.test.json")
 
     def get_token_embedding(word, sentence, tokenizer=tokenizer, model=model):
