@@ -33,4 +33,6 @@ for dataset in ["dwug", "semcor", "masc", "wordnet", "fews"]:
         example["score"] = score
         return example
 
-    data["train"].map(preprocess).to_json(f"{dataset}.predict.json")
+    data = data["train"].map(preprocess)
+    for pos in ["verb", "noun", "adverb", "adjective"]:
+        data.filter(lambda x: x["POS"] == pos).to_json(f"{dataset}.{pos}.predict.json")
