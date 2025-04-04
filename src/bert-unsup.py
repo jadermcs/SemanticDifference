@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import os
 from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer
 
@@ -7,6 +8,8 @@ from transformers import AutoModel, AutoTokenizer
 model_path = "Alibaba-NLP/gte-modernbert-base"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModel.from_pretrained(model_path)
+
+os.makedirs("output/bert", exist_ok=True)
 
 for dataset in ["dwug", "semcor", "masc", "wordnet", "fews", "wic"]:
     print("running experiments for", dataset)
@@ -35,4 +38,4 @@ for dataset in ["dwug", "semcor", "masc", "wordnet", "fews", "wic"]:
 
     data = data["train"].map(preprocess)
     for pos in ["verb", "noun", "adverb", "adjective"]:
-        data.filter(lambda x: x["POS"] == pos).to_json(f"{dataset}.{pos}.predict.json")
+        data.filter(lambda x: x["POS"] == pos).to_json(f"output/bert/{dataset}.{pos}.predict.json")
