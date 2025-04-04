@@ -8,7 +8,7 @@ model_path = "Alibaba-NLP/gte-modernbert-base"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModel.from_pretrained(model_path)
 
-for dataset in ["dwug", "semcor", "masc", "wordnet", "fews"]:
+for dataset in ["dwug", "semcor", "masc", "wordnet", "fews", "wic"]:
     print("running experiments for", dataset)
     data = load_dataset("json", data_files=f"data/{dataset}.test.json")
 
