@@ -42,17 +42,19 @@ def main(raw_args=None):
     user = "<｜User｜>"
     assistant = "<｜Assistant｜>"
 
-    for x in tqdm(corpus.iterrows()):
-        print(x)
-        exit()
+    for example in tqdm(corpus.iterrows()):
         lm = model
         lm += user
-        lm += f"Does the word '{x}' have the same meaning in the following sentences?"
+        lm += f"Does the word \'{example['LEMMA']}\' have the same meaning in the following sentences?\n"
+        lm += f"1. {examples['USAGE_x']}\n"
+        lm += f"2. {examples['USAGE_y']}\n\n"
         lm += assistant
         lm += "<think>"
         lm += gen(stop="</think>", max_tokens=2048)
         lm += "\nBased on my reasoning, here is my final answer:\n"
         lm += "\nA:" + select(["Yes", "No"])
+        print(lm)
+        break
 
 
 if __name__ == '__main__':
