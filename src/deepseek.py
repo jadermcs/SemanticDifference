@@ -16,7 +16,7 @@ def main(raw_args=None):
 
     Arguments:
 
-        <corpus> = corpus
+        <dataset> = dataset
         <instruction> = give examples on how to do the task
         <task> = task to generate the prompt
         <reasoning> = prompt the model to reason before answering
@@ -37,22 +37,23 @@ def main(raw_args=None):
             flash_attn=True,
             echo=False)
 
-    corpus = pd.read_json(args.dataset)
+    dataset = pd.read_json(args.dataset)
 
     user = "<｜User｜>"
     assistant = "<｜Assistant｜>"
 
-    for example in tqdm(corpus.iterrows()):
+    for idx, example in tqdm(dataset.iterrows(), total=dataset.shape[0]):
         lm = model
         lm += user
         lm += f"Does the word \'{example['LEMMA']}\' have the same meaning in the following sentences?\n"
-        lm += f"1. {examples['USAGE_x']}\n"
-        lm += f"2. {examples['USAGE_y']}\n\n"
+        lm += f"1. {example['USAGE_x']}\n"
+        lm += f"2. {example['USAGE_y']}\n\n"
         lm += assistant
         lm += "<think>"
         lm += gen(stop="</think>", max_tokens=2048)
+        lm += "</think>"
         lm += "\nBased on my reasoning, here is my final answer:\n"
-        lm += "\nA:" + select(["Yes", "No"])
+        lm += "\nA: " + select(["Yes", "No"])
         print(lm)
         break
 
