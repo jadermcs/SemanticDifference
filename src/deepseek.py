@@ -42,20 +42,24 @@ def main(raw_args=None):
     user = "<｜User｜>"
     assistant = "<｜Assistant｜>"
 
+    pred = []
     for idx, example in tqdm(dataset.iterrows(), total=dataset.shape[0]):
         lm = model
         lm += user
         lm += f"Does the word \'{example['LEMMA']}\' have the same meaning in the following sentences?\n"
         lm += f"1. {example['USAGE_x']}\n"
         lm += f"2. {example['USAGE_y']}\n\n"
+        print(lm)
         lm += assistant
         lm += "<think>"
         lm += gen(stop="</think>", max_tokens=2048)
         lm += "</think>"
         lm += "\nBased on my reasoning, here is my final answer:\n"
-        lm += "\nA: " + select(["Yes", "No"])
-        print(lm)
-        break
+        lm += "\nA: " + select(["Yes", "No"], name="label")
+        print(lm["label"])
+        pred.append("identical" if lm["label"] == "Yes" else "different")
+    dataset["pred"] = pred
+    print(sum(dataset["LABEL"] == dataset["pred"])/dataset.shape[0])
 
 
 if __name__ == '__main__':
