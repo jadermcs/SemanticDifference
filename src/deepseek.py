@@ -52,8 +52,9 @@ def main(raw_args=None):
         print(lm)
         lm += assistant
         lm += "<think>\n"
-        lm += "For this task I have to use zeugma for sense differentiation, I have to join both usages and check if it makes a bad pun if it does the senses are different."
-        lm += gen(stop="</think>", max_tokens=1024, temp=0.6)
+        if args.rhetorics:
+            lm += "For this task I have to use zeugma for sense differentiation, I have to join both usages and check if it makes a bad pun if it does the senses are different."
+        lm += gen(stop="</think>", max_tokens=1024, temperature=0.6)
         lm += "</think>"
         lm += "\nBased on my reasoning, here is my final answer:\n"
         lm += "\nA: " + select(["Yes", "No"], name="label")
