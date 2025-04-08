@@ -24,7 +24,7 @@ def main(raw_args=None):
     """)
     parser.add_argument('dataset')
     parser.add_argument('--rhetorics', action='store_true')
-    parser.add_argument('--ctx', type=int, default=4096)
+    parser.add_argument('--ctx', type=int, default=2048)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', required=True)
     parser.add_argument('--sample', action='store_true')
@@ -51,8 +51,9 @@ def main(raw_args=None):
         lm += f"2. {example['USAGE_y']}\n\n"
         print(lm)
         lm += assistant
-        lm += "<think>"
-        lm += gen(stop="</think>", max_tokens=2048)
+        lm += "<think>\n"
+        lm += "For this task I have to use zeugma for sense differentiation, I have to join both usages and check if it makes a bad pun if it does the senses are different."
+        lm += gen(stop="</think>", max_tokens=1024, temp=0.6)
         lm += "</think>"
         lm += "\nBased on my reasoning, here is my final answer:\n"
         lm += "\nA: " + select(["Yes", "No"], name="label")
