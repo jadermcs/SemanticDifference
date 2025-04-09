@@ -1,0 +1,511 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from transformers import (
+    AutoModelForMaskedLM, 
+    AutoTokenizer, 
+    DataCollatorForLanguageModeling,
+    get_linear_schedule_with_warmup
+)
+from torch.optim import AdamW
+import numpy as np
+import pandas as pd
+import os
+import json
+from tqdm import tqdm
+from nltk.corpus import wordnet
+import nltk
+from datasets import load_dataset
+
+# Download required NLTK data
+try:
+    nltk.data.find('corpora/wordnet')
+except LookupError:
+    nltk.download('wordnet')
+
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# Constants
+MODEL_NAME = "bert-base-uncased"
+MAX_LENGTH = 128
+BATCH_SIZE = 16
+NUM_EPOCHS = 5
+LEARNING_RATE = 2e-5
+WARMUP_STEPS = 500
+MLM_PROBABILITY = 0.15
+
+# Get all supersense classes from WordNet
+def get_supersense_classes():
+    """Extract all supersense classes from WordNet."""
+    supersenses = set()
+    for synset in wordnet.all_synsets():
+        if hasattr(synset, 'lexname'):
+            supersenses.add(synset.lexname())
+    return sorted(list(supersenses))
+
+# Create a mapping from supersense to index
+SUPERSENSE_CLASSES = get_supersense_classes()
+SUPERSENSE_TO_ID = {supersense: idx for idx, supersense in enumerate(SUPERSENSE_CLASSES)}
+NUM_SUPERSENSE_CLASSES = len(SUPERSENSE_CLASSES)
+
+print(f"Found {NUM_SUPERSENSE_CLASSES} supersense classes: {SUPERSENSE_CLASSES}")
+
+class MultiTaskBertModel(nn.Module):
+    def __init__(self, model_name=MODEL_NAME, num_supersense_classes=NUM_SUPERSENSE_CLASSES):
+        super().__init__()
+        # Load pre-trained BERT model
+        self.bert = AutoModelForMaskedLM.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        # Supersense classification head - now applied to each token position
+        self.supersense_classifier = nn.Linear(self.bert.config.hidden_size, num_supersense_classes)
+        
+    def forward(self, input_ids, attention_mask, labels=None, supersense_labels=None):
+        # Get BERT outputs
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            return_dict=True
+        )
+        
+        # MLM loss
+        mlm_loss = outputs.loss
+        
+        # Get hidden states for supersense classification
+        hidden_states = outputs.hidden_states[-1] if hasattr(outputs, 'hidden_states') else outputs.logits
+        
+        # Apply supersense classifier to all token positions
+        # Shape: [batch_size, seq_length, num_supersense_classes]
+        supersense_logits = self.supersense_classifier(hidden_states)
+        
+        # Calculate supersense classification loss if labels are provided
+        supersense_loss = None
+        if supersense_labels is not None:
+            # Reshape supersense_labels to match the logits shape
+            # supersense_labels shape: [batch_size, seq_length]
+            # We need to create a one-hot encoding for each position
+            batch_size, seq_length = supersense_labels.shape
+            one_hot_labels = F.one_hot(supersense_labels, num_classes=NUM_SUPERSENSE_CLASSES).float()
+            
+            # Apply attention mask to ignore padding tokens
+            # attention_mask shape: [batch_size, seq_length]
+            # Expand to match supersense_logits shape
+            mask = attention_mask.unsqueeze(-1).expand(-1, -1, NUM_SUPERSENSE_CLASSES)
+            
+            # Apply mask to logits and labels
+            masked_logits = supersense_logits * mask
+            masked_labels = one_hot_labels * mask
+            
+            # Calculate cross entropy loss
+            supersense_loss = F.cross_entropy(
+                masked_logits.view(-1, NUM_SUPERSENSE_CLASSES),
+                masked_labels.view(-1, NUM_SUPERSENSE_CLASSES),
+                reduction='mean'
+            )
+        
+        # Total loss is the sum of MLM loss and supersense loss
+        total_loss = mlm_loss
+        if supersense_loss is not None:
+            total_loss = mlm_loss + supersense_loss
+        
+        return {
+            'loss': total_loss,
+            'mlm_loss': mlm_loss,
+            'supersense_loss': supersense_loss,
+            'supersense_logits': supersense_logits
+        }
+
+class WordNetDataset(Dataset):
+    def __init__(self, tokenizer, max_length=MAX_LENGTH, split="train"):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        
+        # Load WordNet data
+        data_file = f"data/wordnet.{split}.json"
+        if os.path.exists(data_file):
+            with open(data_file, 'r') as f:
+                self.data = json.load(f)
+        else:
+            print(f"Data file {data_file} not found. Creating from WordNet...")
+            self.data = self._create_wordnet_data()
+            os.makedirs("data", exist_ok=True)
+            with open(data_file, 'w') as f:
+                json.dump(self.data, f, indent=2)
+        
+        print(f"Loaded {len(self.data)} examples from {split} set")
+    
+    def _create_wordnet_data(self):
+        """Create dataset from WordNet with supersense information."""
+        data = []
+        for synset in tqdm(wordnet.all_synsets()):
+            if not hasattr(synset, 'lexname'):
+                continue
+                
+            supersense = synset.lexname()
+            examples = synset.examples()
+            
+            if not examples:
+                continue
+                
+            for example in examples:
+                # Get the lemma that this synset represents
+                lemma = synset.lemmas()[0].name()
+                
+                # Create a masked version of the example
+                masked_example = self._create_masked_example(example, lemma)
+                
+                data.append({
+                    "text": example,
+                    "masked_text": masked_example,
+                    "lemma": lemma,
+                    "supersense": supersense,
+                    "supersense_id": SUPERSENSE_TO_ID[supersense]
+                })
+        
+        return data
+    
+    def _create_masked_example(self, text, target_word):
+        """Create a masked version of the text where the target word is masked."""
+        # Simple approach: replace the target word with [MASK]
+        return text.replace(target_word, self.tokenizer.mask_token)
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        
+        # Tokenize the original text
+        original_encoding = self.tokenizer(
+            item["text"],
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt"
+        )
+        
+        # Tokenize the masked text
+        masked_encoding = self.tokenizer(
+            item["masked_text"],
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt"
+        )
+        
+        # Find the position of the target word in the original text
+        target_word = item["lemma"]
+        target_tokens = self.tokenizer.tokenize(target_word)
+        
+        # Find the position of the [MASK] token in the masked text
+        mask_token_id = self.tokenizer.mask_token_id
+        mask_positions = (masked_encoding["input_ids"][0] == mask_token_id).nonzero().squeeze()
+        
+        # If no mask token is found, use the first token position
+        if mask_positions.numel() == 0:
+            mask_positions = torch.tensor([1])  # Use position 1 (after [CLS])
+        
+        # If multiple mask tokens, use the first one
+        if mask_positions.numel() > 1:
+            mask_positions = mask_positions[0].unsqueeze(0)
+        
+        # Create supersense labels for each token position
+        # Initialize with a default value (e.g., 0)
+        supersense_labels = torch.zeros(self.max_length, dtype=torch.long)
+        
+        # Set the supersense label for the target word position
+        supersense_labels[mask_positions] = item["supersense_id"]
+        
+        # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
+        # This will be ignored in the loss calculation
+        special_tokens = [self.tokenizer.cls_token_id, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id]
+        for i, token_id in enumerate(masked_encoding["input_ids"][0]):
+            if token_id in special_tokens:
+                supersense_labels[i] = -100
+        
+        return {
+            "input_ids": masked_encoding["input_ids"][0],
+            "attention_mask": masked_encoding["attention_mask"][0],
+            "labels": original_encoding["input_ids"][0],
+            "mask_positions": mask_positions,
+            "supersense_labels": supersense_labels,
+            "lemma": item["lemma"],
+            "supersense": item["supersense"]
+        }
+
+def train_model(model, train_dataloader, val_dataloader=None):
+    """Train the multi-task BERT model."""
+    optimizer = AdamW(model.parameters(), lr=LEARNING_RATE)
+    
+    # Create learning rate scheduler
+    num_training_steps = len(train_dataloader) * NUM_EPOCHS
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=WARMUP_STEPS, num_training_steps=num_training_steps
+    )
+    
+    # Training loop
+    for epoch in range(NUM_EPOCHS):
+        model.train()
+        total_loss = 0
+        total_mlm_loss = 0
+        total_supersense_loss = 0
+        
+        progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
+        for batch in progress_bar:
+            # Move batch to device
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            supersense_labels = batch["supersense_labels"].to(device)
+            
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                supersense_labels=supersense_labels
+            )
+            
+            loss = outputs["loss"]
+            mlm_loss = outputs["mlm_loss"]
+            supersense_loss = outputs["supersense_loss"]
+            
+            # Backward pass
+            loss.backward()
+            
+            # Update weights
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+            
+            # Update progress bar
+            total_loss += loss.item()
+            total_mlm_loss += mlm_loss.item()
+            total_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
+            
+            progress_bar.set_postfix({
+                "loss": f"{loss.item():.4f}",
+                "mlm_loss": f"{mlm_loss.item():.4f}",
+                "supersense_loss": f"{supersense_loss.item():.4f}" if supersense_loss is not None else "N/A"
+            })
+        
+        # Calculate average loss
+        avg_loss = total_loss / len(train_dataloader)
+        avg_mlm_loss = total_mlm_loss / len(train_dataloader)
+        avg_supersense_loss = total_supersense_loss / len(train_dataloader)
+        
+        print(f"Epoch {epoch+1}/{NUM_EPOCHS}")
+        print(f"Average Loss: {avg_loss:.4f}")
+        print(f"Average MLM Loss: {avg_mlm_loss:.4f}")
+        print(f"Average Supersense Loss: {avg_supersense_loss:.4f}")
+        
+        # Validation
+        if val_dataloader is not None:
+            model.eval()
+            val_loss = 0
+            val_mlm_loss = 0
+            val_supersense_loss = 0
+            correct_supersense = 0
+            total_supersense = 0
+            
+            with torch.no_grad():
+                for batch in val_dataloader:
+                    # Move batch to device
+                    input_ids = batch["input_ids"].to(device)
+                    attention_mask = batch["attention_mask"].to(device)
+                    labels = batch["labels"].to(device)
+                    supersense_labels = batch["supersense_labels"].to(device)
+                    
+                    # Forward pass
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        supersense_labels=supersense_labels
+                    )
+                    
+                    loss = outputs["loss"]
+                    mlm_loss = outputs["mlm_loss"]
+                    supersense_loss = outputs["supersense_loss"]
+                    
+                    val_loss += loss.item()
+                    val_mlm_loss += mlm_loss.item()
+                    val_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
+                    
+                    # Calculate supersense accuracy
+                    if supersense_loss is not None:
+                        supersense_logits = outputs["supersense_logits"]
+                        predicted_supersense = torch.argmax(supersense_logits, dim=2)
+                        
+                        # Only consider non-special tokens
+                        valid_positions = (supersense_labels != -100)
+                        correct_supersense += ((predicted_supersense == supersense_labels) & valid_positions).sum().item()
+                        total_supersense += valid_positions.sum().item()
+            
+            # Calculate average validation loss
+            avg_val_loss = val_loss / len(val_dataloader)
+            avg_val_mlm_loss = val_mlm_loss / len(val_dataloader)
+            avg_val_supersense_loss = val_supersense_loss / len(val_dataloader)
+            
+            print(f"Validation Loss: {avg_val_loss:.4f}")
+            print(f"Validation MLM Loss: {avg_val_mlm_loss:.4f}")
+            print(f"Validation Supersense Loss: {avg_val_supersense_loss:.4f}")
+            
+            if total_supersense > 0:
+                supersense_accuracy = correct_supersense / total_supersense
+                print(f"Supersense Classification Accuracy: {supersense_accuracy:.4f}")
+        
+        # Save model checkpoint
+        os.makedirs("output/bert", exist_ok=True)
+        torch.save(model.state_dict(), f"output/bert/bert_weak_supervision_epoch_{epoch+1}.pt")
+
+def evaluate_mlm(model, dataloader):
+    """Evaluate the MLM performance of the model."""
+    model.eval()
+    total_mlm_loss = 0
+    correct_predictions = 0
+    total_predictions = 0
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            # Move batch to device
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            mask_positions = batch["mask_positions"].to(device)
+            
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            
+            mlm_loss = outputs["mlm_loss"]
+            total_mlm_loss += mlm_loss.item()
+            
+            # Get predictions for masked tokens
+            logits = outputs.logits
+            for i, pos in enumerate(mask_positions):
+                if pos < logits.size(1):  # Ensure position is within bounds
+                    predicted_token_id = torch.argmax(logits[i, pos]).item()
+                    true_token_id = labels[i, pos].item()
+                    
+                    if predicted_token_id == true_token_id:
+                        correct_predictions += 1
+                    total_predictions += 1
+    
+    avg_mlm_loss = total_mlm_loss / len(dataloader)
+    accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+    
+    print(f"MLM Loss: {avg_mlm_loss:.4f}")
+    print(f"MLM Accuracy: {accuracy:.4f}")
+    
+    return avg_mlm_loss, accuracy
+
+def evaluate_supersense(model, dataloader):
+    """Evaluate the supersense classification performance of the model."""
+    model.eval()
+    total_supersense_loss = 0
+    correct_predictions = 0
+    total_predictions = 0
+    
+    # Confusion matrix
+    confusion_matrix = np.zeros((NUM_SUPERSENSE_CLASSES, NUM_SUPERSENSE_CLASSES), dtype=int)
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            # Move batch to device
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            supersense_labels = batch["supersense_labels"].to(device)
+            
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                supersense_labels=supersense_labels
+            )
+            
+            supersense_loss = outputs["supersense_loss"]
+            total_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
+            
+            # Get predictions
+            supersense_logits = outputs["supersense_logits"]
+            predicted_supersense = torch.argmax(supersense_logits, dim=2)
+            
+            # Only consider non-special tokens
+            valid_positions = (supersense_labels != -100)
+            
+            # Update confusion matrix
+            for i in range(len(predicted_supersense)):
+                for j in range(predicted_supersense.size(1)):
+                    if valid_positions[i, j]:
+                        true_label = supersense_labels[i, j].item()
+                        pred_label = predicted_supersense[i, j].item()
+                        confusion_matrix[true_label, pred_label] += 1
+            
+            # Calculate accuracy
+            correct_predictions += ((predicted_supersense == supersense_labels) & valid_positions).sum().item()
+            total_predictions += valid_positions.sum().item()
+    
+    avg_supersense_loss = total_supersense_loss / len(dataloader)
+    accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+    
+    print(f"Supersense Classification Loss: {avg_supersense_loss:.4f}")
+    print(f"Supersense Classification Accuracy: {accuracy:.4f}")
+    
+    # Print confusion matrix
+    print("\nConfusion Matrix:")
+    print("True\\Pred", end="\t")
+    for i in range(NUM_SUPERSENSE_CLASSES):
+        print(SUPERSENSE_CLASSES[i][:3], end="\t")
+    print()
+    
+    for i in range(NUM_SUPERSENSE_CLASSES):
+        print(SUPERSENSE_CLASSES[i][:3], end="\t")
+        for j in range(NUM_SUPERSENSE_CLASSES):
+            print(confusion_matrix[i, j], end="\t")
+        print()
+    
+    return avg_supersense_loss, accuracy
+
+def main():
+    # Initialize tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    
+    # Create datasets
+    train_dataset = WordNetDataset(tokenizer, split="train")
+    val_dataset = WordNetDataset(tokenizer, split="test")
+    
+    # Create dataloaders
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    
+    # Initialize model
+    model = MultiTaskBertModel().to(device)
+    
+    # Train model
+    train_model(model, train_dataloader, val_dataloader)
+    
+    # Evaluate model
+    print("\nEvaluating MLM performance...")
+    evaluate_mlm(model, val_dataloader)
+    
+    print("\nEvaluating supersense classification performance...")
+    evaluate_supersense(model, val_dataloader)
+    
+    # Save final model
+    os.makedirs("output/bert", exist_ok=True)
+    torch.save(model.state_dict(), "output/bert/bert_weak_supervision_final.pt")
+    print("\nModel saved to output/bert/bert_weak_supervision_final.pt")
+
+if __name__ == "__main__":
+    main()
