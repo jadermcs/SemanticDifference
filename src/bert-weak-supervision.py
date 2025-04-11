@@ -60,7 +60,7 @@ class MultiTaskBertModel(nn.Module):
     def __init__(self, model_name=MODEL_NAME, num_supersense_classes=NUM_SUPERSENSE_CLASSES):
         super().__init__()
         # Load pre-trained BERT model
-        self.bert = AutoModelForMaskedLM.from_pretrained(model_name)
+        self.bert = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
         # Supersense classification head - now applied to each token position
@@ -85,15 +85,12 @@ class MultiTaskBertModel(nn.Module):
         # Shape: [batch_size, seq_length, num_supersense_classes]
         supersense_logits = self.supersense_classifier(hidden_states)
         
+        # Apply sigmoid to get probabilities for multilabel classification
+        supersense_probs = torch.sigmoid(supersense_logits)
+        
         # Calculate supersense classification loss if labels are provided
         supersense_loss = None
         if supersense_labels is not None:
-            # Reshape supersense_labels to match the logits shape
-            # supersense_labels shape: [batch_size, seq_length]
-            # We need to create a one-hot encoding for each position
-            batch_size, seq_length = supersense_labels.shape
-            one_hot_labels = F.one_hot(supersense_labels, num_classes=NUM_SUPERSENSE_CLASSES).float()
-            
             # Apply attention mask to ignore padding tokens
             # attention_mask shape: [batch_size, seq_length]
             # Expand to match supersense_logits shape
@@ -101,14 +98,19 @@ class MultiTaskBertModel(nn.Module):
             
             # Apply mask to logits and labels
             masked_logits = supersense_logits * mask
-            masked_labels = one_hot_labels * mask
+            masked_labels = supersense_labels * mask
             
-            # Calculate cross entropy loss
-            supersense_loss = F.cross_entropy(
-                masked_logits.view(-1, NUM_SUPERSENSE_CLASSES),
-                masked_labels.view(-1, NUM_SUPERSENSE_CLASSES),
-                reduction='mean'
-            )
+            # Calculate binary cross entropy loss for multilabel classification
+            # We need to handle the special value -100 in the labels
+            valid_positions = (masked_labels != -100)
+            
+            # Only compute loss on valid positions
+            if valid_positions.any():
+                supersense_loss = F.binary_cross_entropy_with_logits(
+                    masked_logits[valid_positions],
+                    masked_labels[valid_positions],
+                    reduction='mean'
+                )
         
         # Total loss is the sum of MLM loss and supersense loss
         total_loss = mlm_loss
@@ -119,7 +121,8 @@ class MultiTaskBertModel(nn.Module):
             'loss': total_loss,
             'mlm_loss': mlm_loss,
             'supersense_loss': supersense_loss,
-            'supersense_logits': supersense_logits
+            'supersense_logits': supersense_logits,
+            'supersense_probs': supersense_probs
         }
 
 class WordNetDataset(Dataset):
@@ -132,44 +135,17 @@ class WordNetDataset(Dataset):
         if os.path.exists(data_file):
             with open(data_file, 'r') as f:
                 self.data = json.load(f)
+            data = []
+            for item in self.data:
+                item["text"] = item["USAGE_x"]+"<sep>"+item["USAGE_y"]
+                item["masked_text"] = item["USAGE_x"].replace(item["WORD_x"], self.tokenizer.mask_token) +\
+                                    "<sep>" + item["USAGE_y"].replace(item["WORD_y"], self.tokenizer.mask_token)
+                data.append(item)
+            self.data = data
         else:
-            print(f"Data file {data_file} not found. Creating from WordNet...")
-            self.data = self._create_wordnet_data()
-            os.makedirs("data", exist_ok=True)
-            with open(data_file, 'w') as f:
-                json.dump(self.data, f, indent=2)
+            raise FileNotFoundError(f"Data file {data_file} not found")
         
         print(f"Loaded {len(self.data)} examples from {split} set")
-    
-    def _create_wordnet_data(self):
-        """Create dataset from WordNet with supersense information."""
-        data = []
-        for synset in tqdm(wordnet.all_synsets()):
-            if not hasattr(synset, 'lexname'):
-                continue
-                
-            supersense = synset.lexname()
-            examples = synset.examples()
-            
-            if not examples:
-                continue
-                
-            for example in examples:
-                # Get the lemma that this synset represents
-                lemma = synset.lemmas()[0].name()
-                
-                # Create a masked version of the example
-                masked_example = self._create_masked_example(example, lemma)
-                
-                data.append({
-                    "text": example,
-                    "masked_text": masked_example,
-                    "lemma": lemma,
-                    "supersense": supersense,
-                    "supersense_id": SUPERSENSE_TO_ID[supersense]
-                })
-        
-        return data
     
     def _create_masked_example(self, text, target_word):
         """Create a masked version of the text where the target word is masked."""
@@ -181,14 +157,19 @@ class WordNetDataset(Dataset):
     
     def __getitem__(self, idx):
         item = self.data[idx]
+
+        synsets = wordnet.synsets(item["LEMMA"])
+        item["supersenses"] = set(supersense.lexname() for supersense in synsets)
+        item["supersense_ids"] = [SUPERSENSE_TO_ID[supersense] for supersense in item["supersenses"]]
         
         # Tokenize the original text
-        original_encoding = self.tokenizer(
+        original_encoding = self.tokenizer( 
             item["text"],
             max_length=self.max_length,
             padding="max_length",
             truncation=True,
-            return_tensors="pt"
+            return_tensors="pt",
+            add_special_tokens=True
         )
         
         # Tokenize the masked text
@@ -197,31 +178,21 @@ class WordNetDataset(Dataset):
             max_length=self.max_length,
             padding="max_length",
             truncation=True,
-            return_tensors="pt"
+            return_tensors="pt",
+            add_special_tokens=True
         )
-        
-        # Find the position of the target word in the original text
-        target_word = item["lemma"]
-        target_tokens = self.tokenizer.tokenize(target_word)
         
         # Find the position of the [MASK] token in the masked text
         mask_token_id = self.tokenizer.mask_token_id
         mask_positions = (masked_encoding["input_ids"][0] == mask_token_id).nonzero().squeeze()
+                
+        # Create multilabel supersense labels for each token position
+        # Initialize with zeros (no supersense)
+        supersense_labels = torch.zeros((self.max_length, NUM_SUPERSENSE_CLASSES), dtype=torch.float)
         
-        # If no mask token is found, use the first token position
-        if mask_positions.numel() == 0:
-            mask_positions = torch.tensor([1])  # Use position 1 (after [CLS])
-        
-        # If multiple mask tokens, use the first one
-        if mask_positions.numel() > 1:
-            mask_positions = mask_positions[0].unsqueeze(0)
-        
-        # Create supersense labels for each token position
-        # Initialize with a default value (e.g., 0)
-        supersense_labels = torch.zeros(self.max_length, dtype=torch.long)
-        
-        # Set the supersense label for the target word position
-        supersense_labels[mask_positions] = item["supersense_id"]
+        # Set the supersense labels for the target word position
+        for supersense_id in item["supersense_ids"]:
+            supersense_labels[mask_positions, supersense_id] = 1.0
         
         # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
         # This will be ignored in the loss calculation
@@ -234,10 +205,7 @@ class WordNetDataset(Dataset):
             "input_ids": masked_encoding["input_ids"][0],
             "attention_mask": masked_encoding["attention_mask"][0],
             "labels": original_encoding["input_ids"][0],
-            "mask_positions": mask_positions,
-            "supersense_labels": supersense_labels,
-            "lemma": item["lemma"],
-            "supersense": item["supersense"]
+            "supersense_labels": supersense_labels
         }
 
 def train_model(model, train_dataloader, val_dataloader=None):
@@ -256,7 +224,6 @@ def train_model(model, train_dataloader, val_dataloader=None):
         total_loss = 0
         total_mlm_loss = 0
         total_supersense_loss = 0
-        
         progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
         for batch in progress_bar:
             # Move batch to device
@@ -314,6 +281,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             val_supersense_loss = 0
             correct_supersense = 0
             total_supersense = 0
+            partial_correct = 0
             
             with torch.no_grad():
                 for batch in val_dataloader:
@@ -341,13 +309,22 @@ def train_model(model, train_dataloader, val_dataloader=None):
                     
                     # Calculate supersense accuracy
                     if supersense_loss is not None:
-                        supersense_logits = outputs["supersense_logits"]
-                        predicted_supersense = torch.argmax(supersense_logits, dim=2)
+                        supersense_probs = outputs["supersense_probs"]
+                        # For multilabel, we use a threshold to determine positive classes
+                        predicted_supersense = (supersense_probs > 0.5).float()
                         
                         # Only consider non-special tokens
-                        valid_positions = (supersense_labels != -100)
-                        correct_supersense += ((predicted_supersense == supersense_labels) & valid_positions).sum().item()
+                        valid_positions = (supersense_labels != -100).any(dim=-1)
+                        
+                        # Calculate accuracy metrics for multilabel classification
+                        # Exact match: all labels must match exactly
+                        exact_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).all(dim=-1)
+                        correct_supersense += exact_match.sum().item()
                         total_supersense += valid_positions.sum().item()
+                        
+                        # Partial match: at least one label matches
+                        partial_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).any(dim=-1)
+                        partial_correct += partial_match.sum().item()
             
             # Calculate average validation loss
             avg_val_loss = val_loss / len(val_dataloader)
@@ -360,7 +337,9 @@ def train_model(model, train_dataloader, val_dataloader=None):
             
             if total_supersense > 0:
                 supersense_accuracy = correct_supersense / total_supersense
-                print(f"Supersense Classification Accuracy: {supersense_accuracy:.4f}")
+                partial_accuracy = partial_correct / total_supersense
+                print(f"Supersense Classification Exact Match Accuracy: {supersense_accuracy:.4f}")
+                print(f"Supersense Classification Partial Match Accuracy: {partial_accuracy:.4f}")
         
         # Save model checkpoint
         os.makedirs("output/bert", exist_ok=True)
@@ -414,11 +393,12 @@ def evaluate_supersense(model, dataloader):
     """Evaluate the supersense classification performance of the model."""
     model.eval()
     total_supersense_loss = 0
-    correct_predictions = 0
+    exact_match_correct = 0
+    partial_match_correct = 0
     total_predictions = 0
     
-    # Confusion matrix
-    confusion_matrix = np.zeros((NUM_SUPERSENSE_CLASSES, NUM_SUPERSENSE_CLASSES), dtype=int)
+    # Metrics for each supersense class
+    class_metrics = {i: {"tp": 0, "fp": 0, "fn": 0} for i in range(NUM_SUPERSENSE_CLASSES)}
     
     with torch.no_grad():
         for batch in dataloader:
@@ -438,44 +418,56 @@ def evaluate_supersense(model, dataloader):
             total_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
             
             # Get predictions
-            supersense_logits = outputs["supersense_logits"]
-            predicted_supersense = torch.argmax(supersense_logits, dim=2)
+            supersense_probs = outputs["supersense_probs"]
+            predicted_supersense = (supersense_probs > 0.5).float()
             
             # Only consider non-special tokens
-            valid_positions = (supersense_labels != -100)
+            valid_positions = (supersense_labels != -100).any(dim=-1)
             
-            # Update confusion matrix
-            for i in range(len(predicted_supersense)):
-                for j in range(predicted_supersense.size(1)):
-                    if valid_positions[i, j]:
-                        true_label = supersense_labels[i, j].item()
-                        pred_label = predicted_supersense[i, j].item()
-                        confusion_matrix[true_label, pred_label] += 1
+            # Calculate accuracy metrics for multilabel classification
+            # Exact match: all labels must match exactly
+            exact_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).all(dim=-1)
+            exact_match_correct += exact_match.sum().item()
             
-            # Calculate accuracy
-            correct_predictions += ((predicted_supersense == supersense_labels) & valid_positions).sum().item()
+            # Partial match: at least one label matches
+            partial_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).any(dim=-1)
+            partial_match_correct += partial_match.sum().item()
+            
             total_predictions += valid_positions.sum().item()
+            
+            # Calculate per-class metrics
+            for i in range(NUM_SUPERSENSE_CLASSES):
+                # True positives: predicted 1, actual 1
+                tp = ((predicted_supersense[:, :, i] == 1) & (supersense_labels[:, :, i] == 1) & (supersense_labels[:, :, i] != -100)).sum().item()
+                # False positives: predicted 1, actual 0
+                fp = ((predicted_supersense[:, :, i] == 1) & (supersense_labels[:, :, i] == 0)).sum().item()
+                # False negatives: predicted 0, actual 1
+                fn = ((predicted_supersense[:, :, i] == 0) & (supersense_labels[:, :, i] == 1)).sum().item()
+                
+                class_metrics[i]["tp"] += tp
+                class_metrics[i]["fp"] += fp
+                class_metrics[i]["fn"] += fn
     
     avg_supersense_loss = total_supersense_loss / len(dataloader)
-    accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+    exact_match_accuracy = exact_match_correct / total_predictions if total_predictions > 0 else 0
+    partial_match_accuracy = partial_match_correct / total_predictions if total_predictions > 0 else 0
     
     print(f"Supersense Classification Loss: {avg_supersense_loss:.4f}")
-    print(f"Supersense Classification Accuracy: {accuracy:.4f}")
+    print(f"Supersense Classification Exact Match Accuracy: {exact_match_accuracy:.4f}")
+    print(f"Supersense Classification Partial Match Accuracy: {partial_match_accuracy:.4f}")
     
-    # Print confusion matrix
-    print("\nConfusion Matrix:")
-    print("True\\Pred", end="\t")
+    # Print per-class metrics
+    print("\nPer-Class Metrics:")
+    print("Class", "Precision", "Recall", "F1", sep="\t")
     for i in range(NUM_SUPERSENSE_CLASSES):
-        print(SUPERSENSE_CLASSES[i][:3], end="\t")
-    print()
+        metrics = class_metrics[i]
+        precision = metrics["tp"] / (metrics["tp"] + metrics["fp"]) if (metrics["tp"] + metrics["fp"]) > 0 else 0
+        recall = metrics["tp"] / (metrics["tp"] + metrics["fn"]) if (metrics["tp"] + metrics["fn"]) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        
+        print(f"{SUPERSENSE_CLASSES[i][:3]}", f"{precision:.4f}", f"{recall:.4f}", f"{f1:.4f}", sep="\t")
     
-    for i in range(NUM_SUPERSENSE_CLASSES):
-        print(SUPERSENSE_CLASSES[i][:3], end="\t")
-        for j in range(NUM_SUPERSENSE_CLASSES):
-            print(confusion_matrix[i, j], end="\t")
-        print()
-    
-    return avg_supersense_loss, accuracy
+    return avg_supersense_loss, exact_match_accuracy
 
 def main():
     # Initialize tokenizer
