@@ -478,10 +478,6 @@ def main():
     # Create datasets
     train_dataset = WordNetDataset(tokenizer, split="train")
     val_dataset = WordNetDataset(tokenizer, split="test")
-    print([tokenizer.decode(x) for x in train_dataset[0]["input_ids"]])
-    print([tokenizer.decode(x) for x in train_dataset[0]["labels"]])
-    print(train_dataset[0]["supersense_labels"].max(axis=1))
-    exit()
     
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
