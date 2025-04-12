@@ -137,8 +137,8 @@ class WordNetDataset(Dataset):
                 self.data = json.load(f)
             data = []
             for item in self.data:
-                usage_x = item["USAGE_x"].reaplace(item["WORD_x"], "[TGT]" + item["WORD_x"] + "[/TGT]")
-                usage_y = item["USAGE_y"].reaplace(item["WORD_y"], "[TGT]" + item["WORD_y"] + "[/TGT]")
+                usage_x = item["USAGE_x"].replace(item["WORD_x"], "[TGT]" + item["WORD_x"] + "[/TGT]")
+                usage_y = item["USAGE_y"].replace(item["WORD_y"], "[TGT]" + item["WORD_y"] + "[/TGT]")
                 item["text"] = usage_x + tokenizer.sep_token + usage_y
                 item["masked_text"] = usage_x.replace(item["WORD_x"], self.tokenizer.mask_token) +\
                                     tokenizer.sep_token + usage_y.replace(item["WORD_y"], self.tokenizer.mask_token)
