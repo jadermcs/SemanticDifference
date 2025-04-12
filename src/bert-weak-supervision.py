@@ -137,9 +137,11 @@ class WordNetDataset(Dataset):
                 self.data = json.load(f)
             data = []
             for item in self.data:
-                item["text"] = item["USAGE_x"] + tokenizer.sep_token + item["USAGE_y"]
-                item["masked_text"] = item["USAGE_x"].replace(item["WORD_x"], self.tokenizer.mask_token) +\
-                                    tokenizer.sep_token + item["USAGE_y"].replace(item["WORD_y"], self.tokenizer.mask_token)
+                usage_x = item["USAGE_x"].reaplace(item["WORD_x"], "[TGT]" + item["WORD_x"] + "[/TGT]")
+                usage_y = item["USAGE_y"].reaplace(item["WORD_y"], "[TGT]" + item["WORD_y"] + "[/TGT]")
+                item["text"] = usage_x + tokenizer.sep_token + usage_y
+                item["masked_text"] = usage_x.replace(item["WORD_x"], self.tokenizer.mask_token) +\
+                                    tokenizer.sep_token + usage_y.replace(item["WORD_y"], self.tokenizer.mask_token)
                 data.append(item)
             self.data = data
         else:
@@ -284,7 +286,8 @@ def train_model(model, train_dataloader, val_dataloader=None):
             partial_correct = 0
             
             with torch.no_grad():
-                for batch in val_dataloader:
+                progress_bar = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
+                for batch in progress_bar:
                     # Move batch to device
                     input_ids = batch["input_ids"].to(device)
                     attention_mask = batch["attention_mask"].to(device)
@@ -472,6 +475,7 @@ def evaluate_supersense(model, dataloader):
 def main():
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer.add_tokens(["[TGT]", "[/TGT]"])
     
     # Create datasets
     train_dataset = WordNetDataset(tokenizer, split="train")
@@ -483,7 +487,8 @@ def main():
     
     # Initialize model
     model = MultiTaskBertModel().to(device)
-    
+    model.resize_token_embeddings(len(tokenizer))
+
     # Train model
     train_model(model, train_dataloader, val_dataloader)
     

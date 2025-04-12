@@ -63,9 +63,13 @@ def main():
              "USAGE_x", "USAGE_y", "POS", "LABEL"]]
     df = df.dropna()
 
-    filtered = df["LEMMA"] <= "j"
-    df[filtered].to_json("data/dwug.train.json", orient="records", indent=2)
-    df[~filtered].to_json("data/dwug.test.json", orient="records", indent=2)
+    train_data = df.sample(frac=0.8, random_state=42)
+    test_data = df.drop(train_data.index)
+    dev_data = test_data.sample(frac=.5, random_state=42)
+    test_data = test_data.drop(dev_data.index)
+    train_data.to_json("data/dwug.train.json", orient="records", indent=2)
+    dev_data.to_json("data/dwug.dev.json", orient="records", indent=2)
+    test_data.to_json("data/dwug.test.json", orient="records", indent=2)
 
 
 if __name__ == "__main__":
