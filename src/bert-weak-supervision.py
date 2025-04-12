@@ -487,7 +487,7 @@ def main():
     
     # Initialize model
     model = MultiTaskBertModel().to(device)
-    model.resize_token_embeddings(len(tokenizer))
+    model.bert.resize_token_embeddings(len(tokenizer))
 
     # Train model
     train_model(model, train_dataloader, val_dataloader)
