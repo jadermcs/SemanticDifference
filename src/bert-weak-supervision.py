@@ -105,8 +105,6 @@ class MultiTaskBertModel(nn.Module):
             valid_positions = (masked_labels != -100)
             
             # Only compute loss on valid positions
-            print(masked_logits[valid_positions])
-            print(masked_labels[valid_positions])
             if valid_positions.any():
                 supersense_loss = F.binary_cross_entropy_with_logits(
                     masked_logits[valid_positions],
