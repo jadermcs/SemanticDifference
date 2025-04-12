@@ -105,6 +105,8 @@ class MultiTaskBertModel(nn.Module):
             valid_positions = (masked_labels != -100)
             
             # Only compute loss on valid positions
+            print(masked_logits[valid_positions])
+            print(masked_labels[valid_positions])
             if valid_positions.any():
                 supersense_loss = F.binary_cross_entropy_with_logits(
                     masked_logits[valid_positions],
@@ -137,9 +139,9 @@ class WordNetDataset(Dataset):
                 self.data = json.load(f)
             data = []
             for item in self.data:
-                item["text"] = item["USAGE_x"]+"<sep>"+item["USAGE_y"]
+                item["text"] = item["USAGE_x"] + tokenizer.sep_token + item["USAGE_y"]
                 item["masked_text"] = item["USAGE_x"].replace(item["WORD_x"], self.tokenizer.mask_token) +\
-                                    "<sep>" + item["USAGE_y"].replace(item["WORD_y"], self.tokenizer.mask_token)
+                                    tokenizer.sep_token + item["USAGE_y"].replace(item["WORD_y"], self.tokenizer.mask_token)
                 data.append(item)
             self.data = data
         else:
@@ -476,6 +478,10 @@ def main():
     # Create datasets
     train_dataset = WordNetDataset(tokenizer, split="train")
     val_dataset = WordNetDataset(tokenizer, split="test")
+    print([tokenizer.decode(x) for x in train_dataset[0]["input_ids"]])
+    print([tokenizer.decode(x) for x in train_dataset[0]["labels"]])
+    print(train_dataset[0]["supersense_labels"].max(axis=1))
+    exit()
     
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
