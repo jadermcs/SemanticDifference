@@ -112,9 +112,11 @@ class MultiTaskBertModel(nn.Module):
                 )
         
         # Total loss is the sum of MLM loss and supersense loss
-        total_loss = mlm_loss
+        total_loss = 0
+        if mlm_loss is not None:
+            total_loss += mlm_loss
         if supersense_loss is not None:
-            total_loss = mlm_loss + supersense_loss
+            total_loss += supersense_loss
         
         return {
             'loss': total_loss,
@@ -281,7 +283,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             partial_correct = 0
             
             with torch.no_grad():
-                progress_bar = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
+                progress_bar = tqdm(val_dataloader, desc=f"Validation Epoch {epoch+1}/{NUM_EPOCHS}")
                 for batch in progress_bar:
                     # Move batch to device
                     input_ids = batch["input_ids"].to(device)
@@ -351,7 +353,8 @@ def evaluate_mlm(model, dataloader, tokenizer):
     total_predictions = 0
     
     with torch.no_grad():
-        for batch in dataloader:
+        progress_bar = tqdm(dataloader, desc="MLM Evaluation")
+        for batch in progress_bar:
             # Move batch to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
@@ -394,7 +397,8 @@ def evaluate_supersense(model, dataloader):
     class_metrics = {i: {"tp": 0, "fp": 0, "fn": 0} for i in range(NUM_SUPERSENSE_CLASSES)}
     
     with torch.no_grad():
-        for batch in dataloader:
+        progress_bar = tqdm(dataloader, desc="Supersense Evaluation")
+        for batch in progress_bar:
             # Move batch to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
