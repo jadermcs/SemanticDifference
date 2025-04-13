@@ -361,7 +361,6 @@ def evaluate_mlm(model, dataloader, tokenizer):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            mask_positions = batch["mask_positions"].to(device)
 
             mask_token_id = tokenizer.mask_token_id
             mask_positions = (input_ids == mask_token_id).nonzero().squeeze().to(device)
