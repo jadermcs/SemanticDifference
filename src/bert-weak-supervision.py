@@ -480,7 +480,7 @@ def main():
     tokenizer.add_tokens(["[TGT]", "[/TGT]"])
     
     # Create datasets
-    train_dataset = WordNetDataset(tokenizer, split="train")
+    train_dataset = WordNetDataset(tokenizer, split="dev")
     val_dataset = WordNetDataset(tokenizer, split="test")
     
     # Create dataloaders
