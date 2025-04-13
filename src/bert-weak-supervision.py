@@ -34,7 +34,7 @@ print(f"Using device: {device}")
 MODEL_NAME = "FacebookAI/roberta-base"
 MAX_LENGTH = 128
 BATCH_SIZE = 16
-NUM_EPOCHS = 5
+NUM_EPOCHS = 1
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 MLM_PROBABILITY = 0.15
@@ -472,7 +472,7 @@ def main():
     tokenizer.add_tokens(["[TGT]", "[/TGT]"])
     
     # Create datasets
-    train_dataset = WordNetDataset(tokenizer, split="dev")
+    train_dataset = WordNetDataset(tokenizer, split="train")
     val_dataset = WordNetDataset(tokenizer, split="test")
     
     # Create dataloaders
