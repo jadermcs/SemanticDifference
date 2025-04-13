@@ -526,7 +526,7 @@ def evaluate_diff(model, dataloader):
             total_diff_loss += diff_loss.item() if diff_loss is not None else 0
             
             diff_probs = outputs["diff_probs"]
-            predicted_diff = (diff_probs > 0.5).float()
+            predicted_diff = (diff_probs > 0.5).float().squeeze(-1)
             correct_diff += (predicted_diff == diff_labels).sum().item()
             total_diff += diff_labels.size(0)
     
