@@ -32,7 +32,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Constants
-MODEL_NAME = "bert-base-uncased"
+MODEL_NAME = "FacebookAI/roberta-base"
 MAX_LENGTH = 128
 BATCH_SIZE = 16
 NUM_EPOCHS = 5
