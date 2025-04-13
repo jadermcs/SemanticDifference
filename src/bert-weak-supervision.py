@@ -7,8 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import (
     AutoModelForMaskedLM, 
-    AutoTokenizer, 
-    DataCollatorForLanguageModeling,
+    AutoTokenizer,
     get_linear_schedule_with_warmup
 )
 from torch.optim import AdamW
@@ -149,11 +148,6 @@ class WordNetDataset(Dataset):
             raise FileNotFoundError(f"Data file {data_file} not found")
         
         print(f"Loaded {len(self.data)} examples from {split} set")
-    
-    def _create_masked_example(self, text, target_word):
-        """Create a masked version of the text where the target word is masked."""
-        # Simple approach: replace the target word with [MASK]
-        return text.replace(target_word, self.tokenizer.mask_token)
     
     def __len__(self):
         return len(self.data)
@@ -378,6 +372,8 @@ def evaluate_mlm(model, dataloader, tokenizer):
             
             # Get predictions for masked tokens
             logits = outputs["logits"]
+            print(logits.argmax(dim=-1))
+            print(labels)
             for i, pos in enumerate(mask_positions):
                 predicted_token_id = torch.argmax(logits[i, pos]).item()
                 true_token_id = labels[i, pos].item()
