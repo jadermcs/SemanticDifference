@@ -64,8 +64,9 @@ class MultiTaskBertModel(nn.Module):
         
         # Supersense classification head - now applied to each token position
         self.supersense_classifier = nn.Linear(self.bert.config.hidden_size, num_supersense_classes)
+        self.diff_classifier = nn.Linear(self.bert.config.hidden_size, 1)
         
-    def forward(self, input_ids, attention_mask, labels=None, supersense_labels=None):
+    def forward(self, input_ids, attention_mask, labels=None, supersense_labels=None, diff_labels=None):
         # Get BERT outputs
         outputs = self.bert(
             input_ids=input_ids,
@@ -83,9 +84,11 @@ class MultiTaskBertModel(nn.Module):
         # Apply supersense classifier to all token positions
         # Shape: [batch_size, seq_length, num_supersense_classes]
         supersense_logits = self.supersense_classifier(hidden_states)
+        diff_logits = self.diff_classifier(hidden_states[:, 0, :])
         
         # Apply sigmoid to get probabilities for multilabel classification
         supersense_probs = torch.sigmoid(supersense_logits)
+        diff_probs = torch.sigmoid(diff_logits)
         
         # Calculate supersense classification loss if labels are provided
         supersense_loss = None
@@ -110,6 +113,13 @@ class MultiTaskBertModel(nn.Module):
                     masked_labels[valid_positions],
                     reduction='mean'
                 )
+        diff_loss = None
+        if diff_labels is not None:
+            diff_loss = F.binary_cross_entropy_with_logits(
+                diff_logits,
+                diff_labels.unsqueeze(-1),
+                reduction='mean'
+            )
         
         # Total loss is the sum of MLM loss and supersense loss
         total_loss = 0
@@ -117,6 +127,8 @@ class MultiTaskBertModel(nn.Module):
             total_loss += mlm_loss
         if supersense_loss is not None:
             total_loss += supersense_loss
+        if diff_loss is not None:
+            total_loss += diff_loss
         
         return {
             'loss': total_loss,
@@ -124,7 +136,10 @@ class MultiTaskBertModel(nn.Module):
             'mlm_loss': mlm_loss,
             'supersense_loss': supersense_loss,
             'supersense_logits': supersense_logits,
-            'supersense_probs': supersense_probs
+            'supersense_probs': supersense_probs,
+            'diff_loss': diff_loss,
+            'diff_logits': diff_logits,
+            'diff_probs': diff_probs
         }
 
 class WordNetDataset(Dataset):
@@ -199,12 +214,13 @@ class WordNetDataset(Dataset):
         for i, token_id in enumerate(masked_encoding["input_ids"][0]):
             if token_id in special_tokens:
                 supersense_labels[i] = -100
-        
+
         return {
             "input_ids": masked_encoding["input_ids"][0],
             "attention_mask": masked_encoding["attention_mask"][0],
             "labels": original_encoding["input_ids"][0],
-            "supersense_labels": supersense_labels
+            "supersense_labels": supersense_labels,
+            "diff_labels": float(item["LABEL"] == "identical")
         }
 
 def train_model(model, train_dataloader, val_dataloader=None):
@@ -223,6 +239,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
         total_loss = 0
         total_mlm_loss = 0
         total_supersense_loss = 0
+        total_diff_loss = 0
         progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
         for batch in progress_bar:
             # Move batch to device
@@ -230,19 +247,20 @@ def train_model(model, train_dataloader, val_dataloader=None):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             supersense_labels = batch["supersense_labels"].to(device)
-            
+            diff_labels = batch["diff_labels"].to(device)
             # Forward pass
             outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
-                supersense_labels=supersense_labels
+                supersense_labels=supersense_labels,
+                diff_labels=diff_labels
             )
             
             loss = outputs["loss"]
             mlm_loss = outputs["mlm_loss"]
             supersense_loss = outputs["supersense_loss"]
-            
+            diff_loss = outputs["diff_loss"]
             # Backward pass
             loss.backward()
             
@@ -255,22 +273,25 @@ def train_model(model, train_dataloader, val_dataloader=None):
             total_loss += loss.item()
             total_mlm_loss += mlm_loss.item()
             total_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
-            
+            total_diff_loss += diff_loss.item() if diff_loss is not None else 0
+
             progress_bar.set_postfix({
                 "loss": f"{loss.item():.4f}",
                 "mlm_loss": f"{mlm_loss.item():.4f}",
-                "supersense_loss": f"{supersense_loss.item():.4f}" if supersense_loss is not None else "N/A"
+                "supersense_loss": f"{supersense_loss.item():.4f}" if supersense_loss is not None else "N/A",
+                "diff_loss": f"{diff_loss.item():.4f}" if diff_loss is not None else "N/A"
             })
         
         # Calculate average loss
         avg_loss = total_loss / len(train_dataloader)
         avg_mlm_loss = total_mlm_loss / len(train_dataloader)
         avg_supersense_loss = total_supersense_loss / len(train_dataloader)
-        
+        avg_diff_loss = total_diff_loss / len(train_dataloader)
         print(f"Epoch {epoch+1}/{NUM_EPOCHS}")
         print(f"Average Loss: {avg_loss:.4f}")
         print(f"Average MLM Loss: {avg_mlm_loss:.4f}")
         print(f"Average Supersense Loss: {avg_supersense_loss:.4f}")
+        print(f"Average Diff Loss: {avg_diff_loss:.4f}")
         
         # Validation
         if val_dataloader is not None:
@@ -278,9 +299,12 @@ def train_model(model, train_dataloader, val_dataloader=None):
             val_loss = 0
             val_mlm_loss = 0
             val_supersense_loss = 0
+            val_diff_loss = 0
             correct_supersense = 0
             total_supersense = 0
             partial_correct = 0
+            correct_diff = 0
+            total_diff = 0
             
             with torch.no_grad():
                 progress_bar = tqdm(val_dataloader, desc="Validation")
@@ -290,23 +314,25 @@ def train_model(model, train_dataloader, val_dataloader=None):
                     attention_mask = batch["attention_mask"].to(device)
                     labels = batch["labels"].to(device)
                     supersense_labels = batch["supersense_labels"].to(device)
-                    
+                    diff_labels = batch["diff_labels"].to(device)
                     # Forward pass
                     outputs = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
-                        supersense_labels=supersense_labels
+                        supersense_labels=supersense_labels,
+                        diff_labels=diff_labels
                     )
                     
                     loss = outputs["loss"]
                     mlm_loss = outputs["mlm_loss"]
                     supersense_loss = outputs["supersense_loss"]
-                    
+                    diff_loss = outputs["diff_loss"]
+
                     val_loss += loss.item()
                     val_mlm_loss += mlm_loss.item()
                     val_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
-                    
+                    val_diff_loss += diff_loss.item() if diff_loss is not None else 0
                     # Calculate supersense accuracy
                     if supersense_loss is not None:
                         supersense_probs = outputs["supersense_probs"]
@@ -325,22 +351,33 @@ def train_model(model, train_dataloader, val_dataloader=None):
                         # Partial match: at least one label matches
                         partial_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).any(dim=-1)
                         partial_correct += partial_match.sum().item()
+
+                    if diff_loss is not None:
+                        diff_probs = outputs["diff_probs"]
+                        predicted_diff = (diff_probs > 0.5).float()
+                        correct_diff += (predicted_diff == diff_labels).sum().item()
+                        total_diff += diff_labels.size(0)
             
             # Calculate average validation loss
             avg_val_loss = val_loss / len(val_dataloader)
             avg_val_mlm_loss = val_mlm_loss / len(val_dataloader)
             avg_val_supersense_loss = val_supersense_loss / len(val_dataloader)
-            
+            avg_val_diff_loss = val_diff_loss / len(val_dataloader)
+
             print(f"Validation Loss: {avg_val_loss:.4f}")
             print(f"Validation MLM Loss: {avg_val_mlm_loss:.4f}")
             print(f"Validation Supersense Loss: {avg_val_supersense_loss:.4f}")
-            
+            print(f"Validation Diff Loss: {avg_val_diff_loss:.4f}")
+
             if total_supersense > 0:
                 supersense_accuracy = correct_supersense / total_supersense
                 partial_accuracy = partial_correct / total_supersense
                 print(f"Supersense Classification Exact Match Accuracy: {supersense_accuracy:.4f}")
                 print(f"Supersense Classification Partial Match Accuracy: {partial_accuracy:.4f}")
-        
+
+            if total_diff > 0:
+                diff_accuracy = correct_diff / total_diff
+                print(f"Diff Classification Accuracy: {diff_accuracy:.4f}")
         # Save model checkpoint
         os.makedirs("output/bert", exist_ok=True)
         torch.save(model.state_dict(), f"output/bert/bert_weak_supervision_epoch_{epoch+1}.pt")
@@ -465,6 +502,43 @@ def evaluate_supersense(model, dataloader):
         print(f"{SUPERSENSE_CLASSES[i]}", f"{precision:.4f}", f"{recall:.4f}", f"{f1:.4f}", sep="\t")
     
     return avg_supersense_loss, exact_match_accuracy
+
+def evaluate_diff(model, dataloader):
+    """Evaluate the difference classification performance of the model."""
+    model.eval()
+    total_diff_loss = 0
+    correct_diff = 0
+    total_diff = 0
+    
+    with torch.no_grad():
+        progress_bar = tqdm(dataloader, desc="Diff Evaluation")
+        for batch in progress_bar:
+            # Move batch to device
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            diff_labels = batch["diff_labels"].to(device)
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                diff_labels=diff_labels
+            )
+
+            diff_loss = outputs["diff_loss"]
+            total_diff_loss += diff_loss.item() if diff_loss is not None else 0
+            
+            diff_probs = outputs["diff_probs"]
+            predicted_diff = (diff_probs > 0.5).float()
+            correct_diff += (predicted_diff == diff_labels).sum().item()
+            total_diff += diff_labels.size(0)
+    
+    avg_diff_loss = total_diff_loss / len(dataloader)
+    diff_accuracy = correct_diff / total_diff if total_diff > 0 else 0
+    
+    print(f"Diff Classification Loss: {avg_diff_loss:.4f}")
+    print(f"Diff Classification Accuracy: {diff_accuracy:.4f}")
+
+    return avg_diff_loss, diff_accuracy
 
 def main():
     # Initialize tokenizer
