@@ -372,8 +372,8 @@ def evaluate_mlm(model, dataloader, tokenizer):
             
             # Get predictions for masked tokens
             logits = outputs["logits"]
-            print(logits.argmax(dim=-1))
-            print(labels)
+            print(logits.argmax(dim=-1) == labels)
+            print(mask_positions)
             for i, pos in enumerate(mask_positions):
                 predicted_token_id = torch.argmax(logits[i, pos]).item()
                 true_token_id = labels[i, pos].item()
