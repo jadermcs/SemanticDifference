@@ -11,14 +11,11 @@ from transformers import (
     get_linear_schedule_with_warmup
 )
 from torch.optim import AdamW
-import numpy as np
-import pandas as pd
 import os
 import json
 from tqdm import tqdm
 from nltk.corpus import wordnet
 import nltk
-from datasets import load_dataset
 
 # Download required NLTK data
 try:
@@ -84,6 +81,8 @@ class MultiTaskBertModel(nn.Module):
         # Apply supersense classifier to all token positions
         # Shape: [batch_size, seq_length, num_supersense_classes]
         supersense_logits = self.supersense_classifier(hidden_states)
+        # Apply diff classifier to the first token position
+        # Shape: [batch_size, 1]
         diff_logits = self.diff_classifier(hidden_states[:, 0, :])
         
         # Apply sigmoid to get probabilities for multilabel classification
@@ -116,9 +115,8 @@ class MultiTaskBertModel(nn.Module):
         diff_loss = None
         if diff_labels is not None:
             diff_loss = F.binary_cross_entropy_with_logits(
-                diff_logits,
-                diff_labels.unsqueeze(-1),
-                reduction='mean'
+                diff_logits.squeeze(-1),
+                diff_labels
             )
         
         # Total loss is the sum of MLM loss and supersense loss
@@ -354,7 +352,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
 
                     if diff_loss is not None:
                         diff_probs = outputs["diff_probs"]
-                        predicted_diff = (diff_probs > 0.5).float()
+                        predicted_diff = (diff_probs > 0.5).float().squeeze(-1)
                         correct_diff += (predicted_diff == diff_labels).sum().item()
                         total_diff += diff_labels.size(0)
             
@@ -566,6 +564,9 @@ def main():
     
     print("\nEvaluating supersense classification performance...")
     evaluate_supersense(model, val_dataloader)
+
+    print("\nEvaluating difference classification performance...")
+    evaluate_diff(model, val_dataloader)
     
     # Save final model
     os.makedirs("output/bert", exist_ok=True)
