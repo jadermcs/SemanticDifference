@@ -357,8 +357,7 @@ def evaluate_mlm(model, dataloader, tokenizer):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
-            mask_token_id = tokenizer.mask_token_id
-            mask_positions = (input_ids == mask_token_id).nonzero().squeeze().to(device)
+            mask_positions = (input_ids == tokenizer.mask_token_id)
             
             # Forward pass
             outputs = model(
@@ -372,15 +371,8 @@ def evaluate_mlm(model, dataloader, tokenizer):
             
             # Get predictions for masked tokens
             logits = outputs["logits"]
-            print(logits.argmax(dim=-1) == labels)
-            print(mask_positions)
-            for i, pos in enumerate(mask_positions):
-                predicted_token_id = torch.argmax(logits[i, pos]).item()
-                true_token_id = labels[i, pos].item()
-                
-                if predicted_token_id == true_token_id:
-                    correct_predictions += 1
-                total_predictions += 1
+            correct_predictions += ((logits.argmax(dim=-1) == labels) & mask_positions).sum().item()
+            total_predictions += mask_positions.sum().item()
     
     avg_mlm_loss = total_mlm_loss / len(dataloader)
     accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
