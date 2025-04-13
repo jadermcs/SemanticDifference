@@ -283,7 +283,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             partial_correct = 0
             
             with torch.no_grad():
-                progress_bar = tqdm(val_dataloader, desc=f"Validation Epoch {epoch+1}/{NUM_EPOCHS}")
+                progress_bar = tqdm(val_dataloader, desc="Validation")
                 for batch in progress_bar:
                     # Move batch to device
                     input_ids = batch["input_ids"].to(device)
@@ -462,7 +462,7 @@ def evaluate_supersense(model, dataloader):
         recall = metrics["tp"] / (metrics["tp"] + metrics["fn"]) if (metrics["tp"] + metrics["fn"]) > 0 else 0
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         
-        print(f"{SUPERSENSE_CLASSES[i][:3]}", f"{precision:.4f}", f"{recall:.4f}", f"{f1:.4f}", sep="\t")
+        print(f"{SUPERSENSE_CLASSES[i]}", f"{precision:.4f}", f"{recall:.4f}", f"{f1:.4f}", sep="\t")
     
     return avg_supersense_loss, exact_match_accuracy
 
