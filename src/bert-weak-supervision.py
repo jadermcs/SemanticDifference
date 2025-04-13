@@ -376,7 +376,7 @@ def evaluate_mlm(model, dataloader, tokenizer):
             total_mlm_loss += mlm_loss.item()
             
             # Get predictions for masked tokens
-            logits = outputs.logits
+            logits = outputs["logits"]
             for i, pos in enumerate(mask_positions):
                 if pos < logits.size(1):  # Ensure position is within bounds
                     predicted_token_id = torch.argmax(logits[i, pos]).item()
