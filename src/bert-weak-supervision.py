@@ -119,6 +119,7 @@ class MultiTaskBertModel(nn.Module):
         
         return {
             'loss': total_loss,
+            'logits': outputs.logits,
             'mlm_loss': mlm_loss,
             'supersense_loss': supersense_loss,
             'supersense_logits': supersense_logits,
