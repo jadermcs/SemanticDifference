@@ -207,7 +207,6 @@ class WordNetDataset(Dataset):
             "input_ids": masked_encoding["input_ids"][0],
             "attention_mask": masked_encoding["attention_mask"][0],
             "labels": original_encoding["input_ids"][0],
-            "mask_positions": mask_positions,
             "supersense_labels": supersense_labels
         }
 
@@ -349,7 +348,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
         os.makedirs("output/bert", exist_ok=True)
         torch.save(model.state_dict(), f"output/bert/bert_weak_supervision_epoch_{epoch+1}.pt")
 
-def evaluate_mlm(model, dataloader):
+def evaluate_mlm(model, dataloader, tokenizer):
     """Evaluate the MLM performance of the model."""
     model.eval()
     total_mlm_loss = 0
@@ -363,6 +362,9 @@ def evaluate_mlm(model, dataloader):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             mask_positions = batch["mask_positions"].to(device)
+
+            mask_token_id = tokenizer.mask_token_id
+            mask_positions = (input_ids == mask_token_id).nonzero().squeeze().to(device)
             
             # Forward pass
             outputs = model(
@@ -495,7 +497,7 @@ def main():
     
     # Evaluate model
     print("\nEvaluating MLM performance...")
-    evaluate_mlm(model, val_dataloader)
+    evaluate_mlm(model, val_dataloader, tokenizer)
     
     print("\nEvaluating supersense classification performance...")
     evaluate_supersense(model, val_dataloader)
