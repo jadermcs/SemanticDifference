@@ -35,7 +35,7 @@ print(f"Using device: {device}")
 MODEL_NAME = "FacebookAI/roberta-base"
 MAX_LENGTH = 128
 BATCH_SIZE = 16
-NUM_EPOCHS = 5
+NUM_EPOCHS = 1
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 MLM_PROBABILITY = 0.15
@@ -207,6 +207,7 @@ class WordNetDataset(Dataset):
             "input_ids": masked_encoding["input_ids"][0],
             "attention_mask": masked_encoding["attention_mask"][0],
             "labels": original_encoding["input_ids"][0],
+            "mask_positions": mask_positions,
             "supersense_labels": supersense_labels
         }
 
