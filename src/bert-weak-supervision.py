@@ -277,7 +277,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            if batch["supersense_labels"] is not None:
+            if batch["supersense_labels"] is not None and batch["supersense_labels"].any():
                 supersense_labels = batch["supersense_labels"].to(device)
             else:
                 supersense_labels = None
@@ -652,7 +652,7 @@ def main():
     # Create datasets
     train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target)
     val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", supersense=args.supersense, target=args.target)
-    print(train_dataset[0])
+    
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
