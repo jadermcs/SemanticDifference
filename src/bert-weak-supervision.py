@@ -141,11 +141,12 @@ class MultiTaskBertModel(nn.Module):
         }
 
 class WordNetDataset(Dataset):
-    def __init__(self, tokenizer, dataset="wordnet", max_length=MAX_LENGTH, split="train", supersense=True, target=True):
+    def __init__(self, tokenizer, dataset="wordnet", max_length=MAX_LENGTH, split="train", supersense=True, target=True, mask=False):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.supersense = supersense
         self.target = target
+        self.mask = mask
         # Load WordNet data
         data_file = f"data/{dataset}.{split}.json"
         if os.path.exists(data_file):
@@ -157,8 +158,6 @@ class WordNetDataset(Dataset):
                     item["USAGE_x"] = self.mark_target(item["USAGE_x"], item["WORD_x"])
                     item["USAGE_y"] = self.mark_target(item["USAGE_y"], item["WORD_y"])
                 item["text"] = item["USAGE_x"] + tokenizer.sep_token + item["USAGE_y"]
-                item["masked_text"] = self.mask_text(item["USAGE_x"], item["WORD_x"]) +\
-                                    tokenizer.sep_token + self.mask_text(item["USAGE_y"], item["WORD_y"])
                 data.append(item)
             self.data = data
         else:
@@ -168,9 +167,6 @@ class WordNetDataset(Dataset):
 
     def mark_target(self, text, word):
         return text.replace(word, "[TGT]" + word + "[/TGT]")
-    
-    def mask_text(self, text, word):
-        return text.replace(word, self.tokenizer.mask_token)
     
     def __len__(self):
         return len(self.data)
@@ -190,22 +186,28 @@ class WordNetDataset(Dataset):
             padding="max_length",
             truncation=True,
             return_tensors="pt",
+            return_offsets_mapping=True,
             add_special_tokens=True
         )
-        
-        # Tokenize the masked text
-        masked_encoding = self.tokenizer(
-            item["masked_text"],
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-            add_special_tokens=True
-        )
+
+        offsets = original_encoding["offset_mapping"][0]
         
         # Find the position of the [MASK] token in the masked text
         mask_token_id = self.tokenizer.mask_token_id
-        mask_positions = (masked_encoding["input_ids"][0] == mask_token_id).nonzero().squeeze()
+        masked_input_ids = original_encoding["input_ids"][0].clone()
+        # Mask the target word
+        if self.mask:
+            tokens_str = self.tokenizer.convert_ids_to_tokens(original_encoding["input_ids"][0])
+            word_start = item["labels"].index(item["WORD_x"])
+            word_end = word_start + len(item["WORD_x"])
+            mask_indices = [i for i, (start, end) in enumerate(offsets) if start >= word_start and end <= word_end]
+            for i in mask_indices:
+                masked_input_ids[i] = mask_token_id
+        # Mask other tokens
+        for i in range(len(masked_input_ids)):
+            if torch.rand(1) < MLM_PROBABILITY:
+                masked_input_ids[i] = mask_token_id
+        mask_positions = (masked_input_ids == mask_token_id).nonzero().squeeze()
                 
         # Create multilabel supersense labels for each token position
         supersense_labels = []
@@ -220,14 +222,14 @@ class WordNetDataset(Dataset):
             # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
             # This will be ignored in the loss calculation
             special_tokens = [self.tokenizer.cls_token_id, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id]
-            for i, token_id in enumerate(masked_encoding["input_ids"][0]):
+            for i, token_id in enumerate(masked_input_ids):
                 if token_id in special_tokens:
                     supersense_labels[i] = -100
 
         return {
-            "input_ids": masked_encoding["input_ids"][0],
-            "attention_mask": masked_encoding["attention_mask"][0],
-            "labels": original_encoding["input_ids"][0],
+            "input_ids": original_encoding["input_ids"][0],
+            "attention_mask": original_encoding["attention_mask"][0],
+            "labels": masked_input_ids,
             "supersense_labels": supersense_labels,
             "diff_labels": float(item["LABEL"] == "identical")
         }
@@ -560,6 +562,7 @@ def main():
     parser.add_argument("--dataset", type=str, default="wordnet")
     parser.add_argument("--supersense", action="store_true")
     parser.add_argument("--target", action="store_true")
+    parser.add_argument("--mask", action="store_true")
     args = parser.parse_args()
     
     # Initialize model
@@ -582,8 +585,9 @@ def main():
     train_model(model, train_dataloader, val_dataloader)
     
     # Evaluate model
-    print("\nEvaluating MLM performance...")
-    evaluate_mlm(model, val_dataloader, tokenizer)
+    if args.mask:
+        print("\nEvaluating MLM performance...")
+        evaluate_mlm(model, val_dataloader, tokenizer)
     
     if args.supersense:
         print("\nEvaluating supersense classification performance...")
@@ -594,8 +598,8 @@ def main():
     
     # Save final model
     os.makedirs("output/bert", exist_ok=True)
-    torch.save(model.state_dict(), "output/bert/bert_weak_supervision_final.pt")
-    print("\nModel saved to output/bert/bert_weak_supervision_final.pt")
+    torch.save(model.state_dict(), f"output/bert/bert_weak_supervision_{args.dataset}.pt")
+    print(f"\nModel saved to output/bert/bert_weak_supervision_{args.dataset}.pt")
 
 if __name__ == "__main__":
     main()
