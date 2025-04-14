@@ -16,6 +16,7 @@ import json
 from tqdm import tqdm
 from nltk.corpus import wordnet
 import nltk
+import wandb
 
 # Download required NLTK data
 try:
@@ -28,10 +29,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Constants
-MODEL_NAME = "FacebookAI/roberta-base"
 MAX_LENGTH = 128
-BATCH_SIZE = 16
-NUM_EPOCHS = 5
+BATCH_SIZE = 32
+NUM_EPOCHS = 10
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 MLM_PROBABILITY = 0.15
@@ -307,6 +307,16 @@ def train_model(model, train_dataloader, val_dataloader=None):
         print(f"Average Supersense Loss: {avg_supersense_loss:.4f}")
         print(f"Average Diff Loss: {avg_diff_loss:.4f}")
         
+        # Log training metrics to wandb
+        wandb.log({
+            f"train/epoch": epoch + 1,
+            f"train/loss": avg_loss,
+            f"train/mlm_loss": avg_mlm_loss,
+            f"train/supersense_loss": avg_supersense_loss,
+            f"train/diff_loss": avg_diff_loss,
+            f"train/learning_rate": scheduler.get_last_lr()[0]
+        })
+        
         # Validation
         if val_dataloader is not None:
             model.eval()
@@ -319,6 +329,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             partial_correct = 0
             correct_diff = 0
             total_diff = 0
+            best_loss = float('inf')
             
             with torch.no_grad():
                 progress_bar = tqdm(val_dataloader, desc="Validation")
@@ -386,18 +397,41 @@ def train_model(model, train_dataloader, val_dataloader=None):
             print(f"Validation Supersense Loss: {avg_val_supersense_loss:.4f}")
             print(f"Validation Diff Loss: {avg_val_diff_loss:.4f}")
 
+            # Log validation metrics to wandb
+            val_metrics = {
+                f"val/epoch": epoch + 1,
+                f"val/loss": avg_val_loss,
+                f"val/mlm_loss": avg_val_mlm_loss,
+                f"val/diff_loss": avg_val_diff_loss
+            }
+            
             if total_supersense > 0:
                 supersense_accuracy = correct_supersense / total_supersense
                 partial_accuracy = partial_correct / total_supersense
                 print(f"Supersense Classification Exact Match Accuracy: {supersense_accuracy:.4f}")
                 print(f"Supersense Classification Partial Match Accuracy: {partial_accuracy:.4f}")
+                val_metrics.update({
+                    f"val/supersense_loss": avg_val_supersense_loss,
+                    f"val/supersense_accuracy": supersense_accuracy,
+                    f"val/supersense_partial_accuracy": partial_accuracy
+                })
 
             if total_diff > 0:
                 diff_accuracy = correct_diff / total_diff
                 print(f"Diff Classification Accuracy: {diff_accuracy:.4f}")
+                val_metrics.update({
+                    f"val/diff_accuracy": diff_accuracy
+                })
+            
+            wandb.log(val_metrics)
+            
         # Save model checkpoint
-        os.makedirs("output/bert", exist_ok=True)
-        torch.save(model.state_dict(), f"output/bert/bert_weak_supervision_epoch_{epoch+1}.pt")
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            os.makedirs("output/bert", exist_ok=True)
+            checkpoint_path = f"output/bert/bert_weak_supervision_run_best.pt"
+            torch.save(model.state_dict(), checkpoint_path)
+        
 
 def evaluate_mlm(model, dataloader, tokenizer):
     """Evaluate the MLM performance of the model."""
@@ -559,16 +593,38 @@ def evaluate_diff(model, dataloader):
 
 def main():
     parser = argparse.ArgumentParser("BERT Weak Supervision")
-    parser.add_argument("--dataset", type=str, default="wordnet")
+    parser.add_argument("--model", type=str, default="FacebookAI/roberta-base")
+    parser.add_argument("--dataset", type=str, default="wic")
     parser.add_argument("--supersense", action="store_true")
     parser.add_argument("--target", action="store_true")
     parser.add_argument("--mask", action="store_true")
+    parser.add_argument("--wandb_project", type=str, default="semantic-difference")
+    parser.add_argument("--wandb_run_name", type=str, default=None)
     args = parser.parse_args()
     
+    # Initialize wandb
+    run_name = args.wandb_run_name or f"{args.model.split('/')[-1]}-{args.dataset}"
+    wandb.init(
+        project=args.wandb_project,
+        name=run_name,
+        config={
+            "model": args.model,
+            "dataset": args.dataset,
+            "supersense": args.supersense,
+            "target": args.target,
+            "mask": args.mask,
+            "batch_size": BATCH_SIZE,
+            "num_epochs": NUM_EPOCHS,
+            "learning_rate": LEARNING_RATE,
+            "warmup_steps": WARMUP_STEPS,
+            "mlm_probability": MLM_PROBABILITY
+        }
+    )
+    
     # Initialize model
-    model = MultiTaskBertModel().to(device)
+    model = MultiTaskBertModel(args.model).to(device)
     # Initialize tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
     if args.target:
         tokenizer.add_tokens(["[TGT]", "[/TGT]"])
         model.bert.resize_token_embeddings(len(tokenizer))
@@ -585,21 +641,37 @@ def main():
     train_model(model, train_dataloader, val_dataloader)
     
     # Evaluate model
-    if args.mask:
-        print("\nEvaluating MLM performance...")
-        evaluate_mlm(model, val_dataloader, tokenizer)
+    print("\nEvaluating MLM performance...")
+    mlm_loss, mlm_accuracy = evaluate_mlm(model, val_dataloader, tokenizer)
+    wandb.log({
+        "final/mlm_loss": mlm_loss,
+        "final/mlm_accuracy": mlm_accuracy
+    })
     
     if args.supersense:
         print("\nEvaluating supersense classification performance...")
-        evaluate_supersense(model, val_dataloader)
+        supersense_loss, supersense_accuracy = evaluate_supersense(model, val_dataloader)
+        wandb.log({
+            "final/supersense_loss": supersense_loss,
+            "final/supersense_accuracy": supersense_accuracy
+        })
 
     print("\nEvaluating difference classification performance...")
-    evaluate_diff(model, val_dataloader)
+    diff_loss, diff_accuracy = evaluate_diff(model, val_dataloader)
+    wandb.log({
+        "final/diff_loss": diff_loss,
+        "final/diff_accuracy": diff_accuracy
+    })
     
     # Save final model
+    model = torch.load(f"output/bert/bert_weak_supervision_run_best.pt")
     os.makedirs("output/bert", exist_ok=True)
-    torch.save(model.state_dict(), f"output/bert/bert_weak_supervision_{args.dataset}.pt")
-    print(f"\nModel saved to output/bert/bert_weak_supervision_{args.dataset}.pt")
+    model_path = f"output/bert/bert_weak_supervision_{args.dataset}.pt"
+    torch.save(model.state_dict(), model_path)
+    print(f"\nModel saved to {model_path}")
+    
+    # Finish wandb run
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
