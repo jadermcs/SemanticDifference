@@ -663,9 +663,13 @@ def main():
         "final/diff_accuracy": diff_accuracy
     })
     
+    # Load the best model checkpoint
+    best_model_path = "output/bert/bert_weak_supervision_run_best.pt"
+    if os.path.exists(best_model_path):
+        model.load_state_dict(torch.load(best_model_path))
+        print(f"Loaded best model from {best_model_path}")
+    
     # Save final model
-    model = torch.load(f"output/bert/bert_weak_supervision_run_best.pt")
-    os.makedirs("output/bert", exist_ok=True)
     model_path = f"output/bert/bert_weak_supervision_{args.dataset}.pt"
     torch.save(model.state_dict(), model_path)
     print(f"\nModel saved to {model_path}")
