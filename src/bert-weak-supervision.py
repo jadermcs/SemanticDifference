@@ -223,7 +223,7 @@ class WordNetDataset(Dataset):
             # For each word in the text, find its supersenses
             for word in words:
                 # Skip special tokens and empty strings
-                if word in ["[CLS]", "[SEP]", "[PAD]", "[TGT]", "[/TGT]"] or not word.strip():
+                if word in [self.tokenizer.cls_token, self.tokenizer.sep_token, self.tokenizer.pad_token, "[TGT]", "[/TGT]"] or not word.strip():
                     continue
                 
                 # Find the character position of this word in the text
