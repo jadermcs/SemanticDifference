@@ -69,11 +69,13 @@ def contrastive_loss(vec1, vec2, labels, margin=1.0):
     return loss
 
 
-def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3):
+def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3, val_dataloader=None):
     model.train()
 
     for epoch in range(num_epochs):
         total_loss = 0
+        correct_predictions = 0
+        total_predictions = 0
 
         for batch in get_batches(train_dataloader, 32):
             print(batch)
@@ -103,9 +105,58 @@ def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3):
             optimizer.step()
 
             total_loss += loss.item()
+            
+            # Calculate accuracy
+            # Compute cosine similarity between vectors
+            cosine_sim = torch.sum(vec1 * vec2, dim=1)
+            # Predict similar (1) if cosine similarity > 0.5, dissimilar (0) otherwise
+            predictions = (cosine_sim > 0.5).float()
+            # Count correct predictions
+            correct_predictions += (predictions == labels).sum().item()
+            total_predictions += labels.size(0)
 
         avg_loss = total_loss / len(train_dataloader)
-        print(f"Epoch {epoch+1}, Loss: {avg_loss:.4f}")
+        accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+        print(f"Epoch {epoch+1}, Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
+        
+        # Evaluate on validation set if available
+        if val_dataloader is not None:
+            model.eval()
+            val_correct = 0
+            val_total = 0
+            val_loss = 0
+            
+            with torch.no_grad():
+                for batch in get_batches(val_dataloader, 32):
+                    # Get data from batch
+                    input_ids1 = torch.tensor(batch['input_ids1']).to(device)
+                    attention_mask1 = torch.tensor(batch['attention_mask1']).to(device)
+                    token_pos1 = batch['token_pos1']
+                    input_ids2 = torch.tensor(batch['input_ids2']).to(device)
+                    attention_mask2 = torch.tensor(batch['attention_mask2']).to(device)
+                    token_pos2 = batch['token_pos2']
+                    labels = torch.tensor([int(label == "identical") for label in batch['LABEL']]).to(device)
+                    
+                    # Forward pass
+                    vec1, vec2 = model(input_ids1, attention_mask1, token_pos1,
+                                       input_ids2, attention_mask2, token_pos2)
+                    
+                    # Calculate loss
+                    loss = contrastive_loss(vec1, vec2, labels)
+                    val_loss += loss.item()
+                    
+                    # Calculate accuracy
+                    cosine_sim = torch.sum(vec1 * vec2, dim=1)
+                    predictions = (cosine_sim > 0.5).float().squeeze(-1)
+                    val_correct += (predictions == labels).sum().item()
+                    val_total += labels.size(0)
+            
+            avg_val_loss = val_loss / len(val_dataloader) if len(val_dataloader) > 0 else 0
+            val_accuracy = val_correct / val_total if val_total > 0 else 0
+            print(f"Validation Loss: {avg_val_loss:.4f}, Validation Accuracy: {val_accuracy:.4f}")
+            
+            # Switch back to training mode
+            model.train()
 
 if __name__ == "__main__":
     model_path = "FacebookFacebookAI/roberta-base"
@@ -117,7 +168,7 @@ if __name__ == "__main__":
     for dataset in ["wordnet"]:#, "semcor", "masc", "wordnet", "fews", "wic"]:
         print("running experiments for", dataset)
         train_data = load_dataset("json", data_files=f"data/{dataset}.train.json")
-
+        
         def get_token_embedding(word, sentence, suffix, tokenizer=tokenizer, model=model):
             tokens = tokenizer.tokenize(sentence, add_special_tokens=True)
             tokens_ids = tokenizer(sentence, padding="max_length", truncation=True, max_length=128, add_special_tokens=True)
@@ -135,8 +186,15 @@ if __name__ == "__main__":
             return tokens1
 
         train_data = train_data["train"].map(preprocess)
+        
+        # Try to load validation data if available
+        val_data = None
+        try:
+            val_data = load_dataset("json", data_files=f"data/{dataset}.test.json")
+            val_data = val_data["train"].map(preprocess)
+            print(f"Loaded validation data with {len(val_data)} examples")
+        except Exception as e:
+            print(f"No validation data found: {e}")
 
         optim = AdamW(model.parameters(), lr=5e-5)
-        train_bert_contrastive(model, train_data, optim)
-        # for pos in ["verb", "noun", "adverb", "adjective"]:
-        #     train_data.filter(lambda x: x["POS"] == pos).to_json(f"output/bert/{dataset}.{pos}.predict.json")
+        train_bert_contrastive(model, train_data, optim, val_dataloader=val_data)
