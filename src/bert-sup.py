@@ -108,13 +108,13 @@ def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3):
         print(f"Epoch {epoch+1}, Loss: {avg_loss:.4f}")
 
 if __name__ == "__main__":
-    model_path = "Alibaba-NLP/gte-modernbert-base"
+    model_path = "FacebookFacebookAI/roberta-base"
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = BertContrastiveModel(model_path)
 
     os.makedirs("output/bert", exist_ok=True)
 
-    for dataset in ["dwug"]:#, "semcor", "masc", "wordnet", "fews", "wic"]:
+    for dataset in ["wordnet"]:#, "semcor", "masc", "wordnet", "fews", "wic"]:
         print("running experiments for", dataset)
         train_data = load_dataset("json", data_files=f"data/{dataset}.train.json")
 
