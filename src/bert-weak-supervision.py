@@ -20,7 +20,7 @@ import wandb
 
 # Download required NLTK data
 try:
-    nltk.data.find('corpora/wordnet')
+    nltk.data.find('corpora/wordnet.zip')
 except LookupError:
     nltk.download('wordnet')
 
@@ -31,7 +31,7 @@ print(f"Using device: {device}")
 # Constants
 MAX_LENGTH = 128
 BATCH_SIZE = 32
-NUM_EPOCHS = 10
+NUM_EPOCHS = 30
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 MLM_PROBABILITY = 0.15
