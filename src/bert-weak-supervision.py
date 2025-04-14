@@ -17,7 +17,7 @@ from tqdm import tqdm
 from nltk.corpus import wordnet
 import nltk
 import wandb
-
+from functools import lru_cache
 # Download required NLTK data
 try:
     nltk.data.find('corpora/wordnet.zip')
@@ -44,6 +44,12 @@ def get_supersense_classes():
         if hasattr(synset, 'lexname'):
             supersenses.add(synset.lexname())
     return sorted(list(supersenses))
+
+
+@lru_cache(maxsize=200000)
+def get_word_supersenses(word):
+    synsets = wordnet.synsets(word)
+    return set(synset.lexname() for synset in synsets)
 
 # Create a mapping from supersense to index
 SUPERSENSE_CLASSES = get_supersense_classes()
@@ -141,7 +147,7 @@ class MultiTaskBertModel(nn.Module):
         }
 
 class WordNetDataset(Dataset):
-    def __init__(self, tokenizer, dataset="wordnet", max_length=MAX_LENGTH, split="train", supersense=True, target=True, mask=False):
+    def __init__(self, tokenizer, dataset="wordnet", max_length=MAX_LENGTH, split="train", supersense=False, target=True, mask=False):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.supersense = supersense
@@ -230,14 +236,10 @@ class WordNetDataset(Dataset):
                 word_token_indices = [i for i, (start, end) in enumerate(offsets) if start >= word_start and end <= word_end]
                 
                 # Get supersenses for this word
-                synsets = wordnet.synsets(word)
-                word_supersenses = set(synset.lexname() for synset in synsets)
+                word_supersenses = get_word_supersenses(word)
                 word_supersense_ids = [SUPERSENSE_TO_ID[supersense] for supersense in word_supersenses]
-                
-                # Set the supersense labels for all tokens of this word
-                for token_idx in word_token_indices:
-                    for supersense_id in word_supersense_ids:
-                        supersense_labels[token_idx, supersense_id] = 1.0
+                supersense_labels[word_token_indices, word_supersense_ids] = 1.0
+            assert len(supersense_labels) == len(masked_input_ids), "Supersense labels and masked input ids have different lengths"
             
             # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
             # This will be ignored in the loss calculation
