@@ -277,7 +277,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            if batch["supersense_labels"] is not None and len(batch["supersense_labels"]) > 0:
+            if len(batch["supersense_labels"]) > 0:
                 supersense_labels = batch["supersense_labels"].to(device)
             else:
                 supersense_labels = None
@@ -650,8 +650,8 @@ def main():
         model.bert.resize_token_embeddings(len(tokenizer))
     
     # Create datasets
-    train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target)
-    val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", supersense=args.supersense, target=args.target)
+    train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target, mask=args.mask)
+    val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", target=args.target)
     
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
