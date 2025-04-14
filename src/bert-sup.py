@@ -159,7 +159,7 @@ def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3, val
             model.train()
 
 if __name__ == "__main__":
-    model_path = "FacebookFacebookAI/roberta-base"
+    model_path = "FacebookAI/roberta-base"
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = BertContrastiveModel(model_path)
 
