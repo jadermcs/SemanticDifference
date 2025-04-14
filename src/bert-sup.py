@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import os
 from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer
-
+from tqdm import tqdm
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch. optim import AdamW
@@ -71,7 +71,7 @@ def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3, val
         correct_predictions = 0
         total_predictions = 0
 
-        for batch in get_batches(train_dataloader, 32):
+        for batch in tqdm(get_batches(train_dataloader, 32), total=len(train_dataloader)):
             # Get data from batch
             input_ids1 = torch.tensor(batch['input_ids1']).to(device)
             attention_mask1 = torch.tensor(batch['attention_mask1']).to(device)
