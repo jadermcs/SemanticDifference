@@ -325,7 +325,10 @@ def train_model(model, train_dataloader, val_dataloader=None):
                     input_ids = batch["input_ids"].to(device)
                     attention_mask = batch["attention_mask"].to(device)
                     labels = batch["labels"].to(device)
-                    supersense_labels = batch["supersense_labels"].to(device)
+                    if batch["supersense_labels"]:
+                        supersense_labels = batch["supersense_labels"].to(device)
+                    else:
+                        supersense_labels = None
                     diff_labels = batch["diff_labels"].to(device)
                     # Forward pass
                     outputs = model(
