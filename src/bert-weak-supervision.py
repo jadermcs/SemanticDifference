@@ -174,11 +174,6 @@ class WordNetDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
 
-        if self.supersense:
-            synsets = wordnet.synsets(item["LEMMA"])
-            item["supersenses"] = set(supersense.lexname() for supersense in synsets)
-            item["supersense_ids"] = [SUPERSENSE_TO_ID[supersense] for supersense in item["supersenses"]]
-        
         # Tokenize the original text
         original_encoding = self.tokenizer( 
             item["text"],
@@ -195,18 +190,19 @@ class WordNetDataset(Dataset):
         # Find the position of the [MASK] token in the masked text
         mask_token_id = self.tokenizer.mask_token_id
         masked_input_ids = original_encoding["input_ids"][0].clone()
+        
         # Mask the target word
         if self.mask:
-            tokens_str = self.tokenizer.convert_ids_to_tokens(original_encoding["input_ids"][0])
-            word_start = item["labels"].index(item["WORD_x"])
-            word_end = word_start + len(item["WORD_x"])
+            word = item["WORD_x"] if item["WORD_x"] in item["text"] else item["WORD_y"]
+            word_start = item["text"].index(word)
+            word_end = word_start + len(word)
             mask_indices = [i for i, (start, end) in enumerate(offsets) if start >= word_start and end <= word_end]
-            for i in mask_indices:
-                masked_input_ids[i] = mask_token_id
+            masked_input_ids[mask_indices] = mask_token_id
+            assert len(masked_input_ids) == len(original_encoding["input_ids"][0]), "Masked input ids and original input ids have different lengths"
+        
         # Mask other tokens
-        for i in range(len(masked_input_ids)):
-            if torch.rand(1) < MLM_PROBABILITY:
-                masked_input_ids[i] = mask_token_id
+        random_mask_indices = torch.rand(len(masked_input_ids)) < MLM_PROBABILITY
+        masked_input_ids[random_mask_indices] = mask_token_id
         mask_positions = (masked_input_ids == mask_token_id).nonzero().squeeze()
                 
         # Create multilabel supersense labels for each token position
@@ -215,9 +211,33 @@ class WordNetDataset(Dataset):
             # Initialize with zeros (no supersense)
             supersense_labels = torch.zeros((self.max_length, NUM_SUPERSENSE_CLASSES), dtype=torch.float)
             
-            # Set the supersense labels for the target word position
-            for supersense_id in item["supersense_ids"]:
-                supersense_labels[mask_positions, supersense_id] = 1.0
+            # Get all words in the text
+            words = item["text"].split()
+            
+            # For each word in the text, find its supersenses
+            for word in words:
+                # Skip special tokens and empty strings
+                if word in ["[CLS]", "[SEP]", "[PAD]", "[TGT]", "[/TGT]"] or not word.strip():
+                    continue
+                
+                # Find the character position of this word in the text
+                word_start = item["text"].find(word)
+                if word_start == -1:  # Word not found (might be part of another word)
+                    continue
+                word_end = word_start + len(word)
+                
+                # Find tokens that overlap with this word
+                word_token_indices = [i for i, (start, end) in enumerate(offsets) if start >= word_start and end <= word_end]
+                
+                # Get supersenses for this word
+                synsets = wordnet.synsets(word)
+                word_supersenses = set(synset.lexname() for synset in synsets)
+                word_supersense_ids = [SUPERSENSE_TO_ID[supersense] for supersense in word_supersenses]
+                
+                # Set the supersense labels for all tokens of this word
+                for token_idx in word_token_indices:
+                    for supersense_id in word_supersense_ids:
+                        supersense_labels[token_idx, supersense_id] = 1.0
             
             # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
             # This will be ignored in the loss calculation
@@ -257,7 +277,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            if batch["supersense_labels"]:
+            if batch["supersense_labels"] is not None:
                 supersense_labels = batch["supersense_labels"].to(device)
             else:
                 supersense_labels = None
@@ -632,7 +652,7 @@ def main():
     # Create datasets
     train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target)
     val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", supersense=args.supersense, target=args.target)
-    
+    print(train_dataset[0])
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
