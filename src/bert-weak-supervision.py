@@ -53,7 +53,7 @@ NUM_SUPERSENSE_CLASSES = len(SUPERSENSE_CLASSES)
 print(f"Found {NUM_SUPERSENSE_CLASSES} supersense classes: {SUPERSENSE_CLASSES}")
 
 class MultiTaskBertModel(nn.Module):
-    def __init__(self, model_name=MODEL_NAME, num_supersense_classes=NUM_SUPERSENSE_CLASSES):
+    def __init__(self, model_name, num_supersense_classes=NUM_SUPERSENSE_CLASSES):
         super().__init__()
         # Load pre-trained BERT model
         self.bert = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
