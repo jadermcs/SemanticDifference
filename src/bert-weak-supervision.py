@@ -277,7 +277,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            if batch["supersense_labels"] is not None and batch["supersense_labels"].any():
+            if batch["supersense_labels"] is not None and len(batch["supersense_labels"]) > 0:
                 supersense_labels = batch["supersense_labels"].to(device)
             else:
                 supersense_labels = None
