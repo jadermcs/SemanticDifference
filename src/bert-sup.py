@@ -42,14 +42,8 @@ class BertContrastiveModel(nn.Module):
 
         # Extract specific token representations
         # For each example in the batch, get the token at the specified position
-        print(hidden_states1.shape)
-        print(token_pos1)
-        print(hidden_states2.shape)
-        print(token_pos2)
-        token_vectors1 = torch.stack([hidden_states1[i, pos, :]
-                                     for i, pos in enumerate(token_pos1)])
-        token_vectors2 = torch.stack([hidden_states2[i, pos, :]
-                                     for i, pos in enumerate(token_pos2)])
+        token_vectors1 = hidden_states1[:, token_pos1, :].mean(dim=1).squeeze(1)
+        token_vectors2 = hidden_states2[:, token_pos2, :].mean(dim=1).squeeze(1)
 
         # Normalize vectors
         token_vectors1 = F.normalize(token_vectors1, p=2, dim=1)
@@ -78,7 +72,6 @@ def train_bert_contrastive(model, train_dataloader, optimizer, num_epochs=3, val
         total_predictions = 0
 
         for batch in get_batches(train_dataloader, 32):
-            print(batch)
             # Get data from batch
             input_ids1 = torch.tensor(batch['input_ids1']).to(device)
             attention_mask1 = torch.tensor(batch['attention_mask1']).to(device)
