@@ -1,4 +1,4 @@
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --wandb_run_name "roberta-base-wic"
+# python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --wandb_run_name "roberta-base-wic"
 python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --mask --wandb_run_name "roberta-base-wic-mask"
 python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --target --wandb_run_name "roberta-base-wic-target"
 python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --supersense --wandb_run_name "roberta-base-wic-supersense"
