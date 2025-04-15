@@ -19,6 +19,7 @@ import nltk
 import wandb
 from functools import lru_cache
 from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 # Download required NLTK data
 try:
     nltk.data.find('corpora/wordnet.zip')
@@ -219,7 +220,7 @@ class WordNetDataset(Dataset):
             # Initialize with negative infinity (no supersense)
             supersense_labels = torch.full((self.max_length, NUM_SUPERSENSE_CLASSES), -100, dtype=torch.float)
             # Get all words in the text
-            words = item["text"].split()
+            words = word_tokenize(item["text"])
             
             # For each word in the text, find its supersenses
 
