@@ -357,7 +357,6 @@ def train_model(model, train_dataloader, val_dataloader=None):
             val_diff_loss = 0
             correct_supersense = 0
             total_supersense = 0
-            partial_correct = 0
             correct_diff = 0
             total_diff = 0
             best_loss = float('inf')
@@ -406,10 +405,6 @@ def train_model(model, train_dataloader, val_dataloader=None):
                         exact_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).all(dim=-1)
                         correct_supersense += exact_match.sum().item()
                         total_supersense += valid_positions.sum().item()
-                        
-                        # Partial match: at least one label matches
-                        partial_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).any(dim=-1)
-                        partial_correct += partial_match.sum().item()
 
                     if diff_loss is not None:
                         diff_probs = outputs["diff_probs"]
@@ -438,13 +433,10 @@ def train_model(model, train_dataloader, val_dataloader=None):
             
             if total_supersense > 0:
                 supersense_accuracy = correct_supersense / total_supersense
-                partial_accuracy = partial_correct / total_supersense
                 print(f"Supersense Classification Exact Match Accuracy: {supersense_accuracy:.4f}")
-                print(f"Supersense Classification Partial Match Accuracy: {partial_accuracy:.4f}")
                 val_metrics.update({
                     f"val/supersense_loss": avg_val_supersense_loss,
                     f"val/supersense_accuracy": supersense_accuracy,
-                    f"val/supersense_partial_accuracy": partial_accuracy
                 })
 
             if total_diff > 0:
@@ -509,7 +501,6 @@ def evaluate_supersense(model, dataloader):
     model.eval()
     total_supersense_loss = 0
     exact_match_correct = 0
-    partial_match_correct = 0
     total_predictions = 0
     
     # Metrics for each supersense class
@@ -545,10 +536,6 @@ def evaluate_supersense(model, dataloader):
             exact_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).all(dim=-1)
             exact_match_correct += exact_match.sum().item()
             
-            # Partial match: at least one label matches
-            partial_match = ((predicted_supersense == supersense_labels) & (supersense_labels != -100)).any(dim=-1)
-            partial_match_correct += partial_match.sum().item()
-            
             total_predictions += valid_positions.sum().item()
             
             # Calculate per-class metrics
@@ -566,11 +553,9 @@ def evaluate_supersense(model, dataloader):
     
     avg_supersense_loss = total_supersense_loss / len(dataloader)
     exact_match_accuracy = exact_match_correct / total_predictions if total_predictions > 0 else 0
-    partial_match_accuracy = partial_match_correct / total_predictions if total_predictions > 0 else 0
-    
+
     print(f"Supersense Classification Loss: {avg_supersense_loss:.4f}")
     print(f"Supersense Classification Exact Match Accuracy: {exact_match_accuracy:.4f}")
-    print(f"Supersense Classification Partial Match Accuracy: {partial_match_accuracy:.4f}")
     
     # Print per-class metrics
     print("\nPer-Class Metrics:")
