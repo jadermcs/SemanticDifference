@@ -18,6 +18,7 @@ from nltk.corpus import wordnet
 import nltk
 import wandb
 from functools import lru_cache
+from nltk.stem import WordNetLemmatizer
 # Download required NLTK data
 try:
     nltk.data.find('corpora/wordnet.zip')
@@ -35,6 +36,7 @@ NUM_EPOCHS = 30
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 MLM_PROBABILITY = 0.15
+lemmatizer = WordNetLemmatizer()
 
 # Get all supersense classes from WordNet
 def get_supersense_classes():
@@ -48,6 +50,8 @@ def get_supersense_classes():
 
 @lru_cache(maxsize=200000)
 def get_word_supersenses(word):
+    # Lemmatize the word
+    word = lemmatizer.lemmatize(word)
     synsets = wordnet.synsets(word)
     return set(synset.lexname() for synset in synsets)
 
@@ -213,16 +217,24 @@ class WordNetDataset(Dataset):
         # Create multilabel supersense labels for each token position
         supersense_labels = []
         if self.supersense:
-            # Initialize with zeros (no supersense)
-            supersense_labels = torch.zeros((self.max_length, NUM_SUPERSENSE_CLASSES), dtype=torch.float)
-            
+            # Initialize with negative infinity (no supersense)
+            supersense_labels = torch.full((self.max_length, NUM_SUPERSENSE_CLASSES), -100, dtype=torch.float)
             # Get all words in the text
             words = item["text"].split()
             
             # For each word in the text, find its supersenses
+
+            special_tokens = [
+                self.tokenizer.cls_token_id,
+                self.tokenizer.sep_token_id,
+                self.tokenizer.pad_token_id,
+                self.tokenizer.mask_token_id,
+                "[TGT]",
+                "[/TGT]"
+            ]
             for word in words:
                 # Skip special tokens and empty strings
-                if word in [self.tokenizer.cls_token, self.tokenizer.sep_token, self.tokenizer.pad_token, "[TGT]", "[/TGT]"] or not word.strip():
+                if len(word) < 4 or word in special_tokens or not word.strip():
                     continue
                 
                 # Find the character position of this word in the text
@@ -236,18 +248,14 @@ class WordNetDataset(Dataset):
                 
                 # Get supersenses for this word
                 word_supersenses = get_word_supersenses(word)
+                if not word_supersenses:
+                    continue
                 word_supersense_ids = [SUPERSENSE_TO_ID[supersense] for supersense in word_supersenses]
                 for token_idx in word_token_indices:
-                    for supersense_id in word_supersense_ids:
-                        supersense_labels[token_idx, supersense_id] = 1.0
+                    supersense_labels[token_idx, :] = 0.0
+                    supersense_labels[token_idx, word_supersense_ids] = 1.0
             assert len(supersense_labels) == len(masked_input_ids), "Supersense labels and masked input ids have different lengths"
             
-            # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
-            # This will be ignored in the loss calculation
-            special_tokens = [self.tokenizer.cls_token_id, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id]
-            for i, token_id in enumerate(masked_input_ids):
-                if token_id in special_tokens:
-                    supersense_labels[i] = -100
 
         return {
             "input_ids": original_encoding["input_ids"][0],
