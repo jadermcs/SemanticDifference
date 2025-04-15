@@ -686,7 +686,7 @@ def main():
         print(f"Loaded best model from {best_model_path}")
     
     # Save final model
-    model_path = f"output/bert/bert_weak_supervision_{args.dataset}.pt"
+    model_path = f"output/bert/bert_weak_supervision_{args.wandb_run_name}.pt"
     torch.save(model.state_dict(), model_path)
     print(f"\nModel saved to {model_path}")
     
