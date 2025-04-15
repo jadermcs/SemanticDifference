@@ -5,7 +5,7 @@ from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer
 
 
-model_path = "Alibaba-NLP/gte-modernbert-base"
+model_path = "FacebookAI/roberta-large"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModel.from_pretrained(model_path)
 

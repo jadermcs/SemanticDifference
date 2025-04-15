@@ -1,10 +1,10 @@
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --wandb_run_name "roberta-base-wic"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --mask --wandb_run_name "roberta-base-wic-mask"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --target --wandb_run_name "roberta-base-wic-target"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --supersense --wandb_run_name "roberta-base-wic-supersense"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --mask --target --wandb_run_name "roberta-base-wic-mask-target"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --mask --supersense --wandb_run_name "roberta-base-wic-mask-supersense"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic --target --supersense --wandb_run_name "roberta-base-wic-target-supersense"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --wandb_run_name "roberta-large-wic"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --mask --wandb_run_name "roberta-large-wic-mask"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --target --wandb_run_name "roberta-large-wic-target"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --supersense --wandb_run_name "roberta-large-wic-supersense"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --mask --target --wandb_run_name "roberta-large-wic-mask-target"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --mask --supersense --wandb_run_name "roberta-large-wic-mask-supersense"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --target --supersense --wandb_run_name "roberta-large-wic-target-supersense"
 
 # python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset dwug
 # python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset dwug --mask

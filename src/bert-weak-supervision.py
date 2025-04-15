@@ -31,7 +31,7 @@ print(f"Using device: {device}")
 
 # Constants
 MAX_LENGTH = 128
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 NUM_EPOCHS = 30
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
@@ -119,8 +119,7 @@ class MultiTaskBertModel(nn.Module):
             if valid_positions.any():
                 supersense_loss = F.binary_cross_entropy_with_logits(
                     masked_logits[valid_positions],
-                    masked_labels[valid_positions],
-                    reduction='mean'
+                    masked_labels[valid_positions]
                 )
         diff_loss = None
         if diff_labels is not None:
