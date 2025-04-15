@@ -209,7 +209,6 @@ class WordNetDataset(Dataset):
         # Mask other tokens
         random_mask_indices = torch.rand(len(masked_input_ids)) < MLM_PROBABILITY
         masked_input_ids[random_mask_indices] = mask_token_id
-        mask_positions = (masked_input_ids == mask_token_id).nonzero().squeeze()
                 
         # Create multilabel supersense labels for each token position
         supersense_labels = []
@@ -238,7 +237,9 @@ class WordNetDataset(Dataset):
                 # Get supersenses for this word
                 word_supersenses = get_word_supersenses(word)
                 word_supersense_ids = [SUPERSENSE_TO_ID[supersense] for supersense in word_supersenses]
-                supersense_labels[word_token_indices, word_supersense_ids] = 1.0
+                for token_idx in word_token_indices:
+                    for supersense_id in word_supersense_ids:
+                        supersense_labels[token_idx, supersense_id] = 1.0
             assert len(supersense_labels) == len(masked_input_ids), "Supersense labels and masked input ids have different lengths"
             
             # Set special tokens (CLS, SEP, PAD) to a special value (e.g., -100)
@@ -653,7 +654,7 @@ def main():
     
     # Create datasets
     train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target, mask=args.mask)
-    val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", target=args.target)
+    val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", supersense=args.supersense, target=args.target, mask=args.mask)
     
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
