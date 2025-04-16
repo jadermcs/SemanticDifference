@@ -106,7 +106,7 @@ def main():
     
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
-    test_dataset = load_data(args.dataset, split="test", mark_target=args.mark_target)
+    test_dataset = load_data("wic", split="test", mark_target=args.mark_target)
 
     datasets = DatasetDict({
         "train": train_dataset,
