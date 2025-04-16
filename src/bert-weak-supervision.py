@@ -33,7 +33,7 @@ print(f"Using device: {device}")
 
 # Constants
 MAX_LENGTH = 128
-NUM_EPOCHS = 30
+NUM_EPOCHS = 10
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 MLM_PROBABILITY = 0.15
@@ -111,8 +111,8 @@ class MultiTaskBertModel(nn.Module):
             # Apply mask to logits and labels
             masked_logits = supersense_logits * mask
             masked_labels = supersense_labels * mask
-            # Calculate binary cross entropy loss for multilabel classification
-            valid_positions = (masked_labels != -100)
+            # Calculate binary cross entropy loss for multilabel classification of masked tokens
+            valid_positions = (input_ids == self.tokenizer.mask_token_id)
             
             # Only compute loss on valid positions
             if valid_positions.any():
@@ -525,7 +525,7 @@ def evaluate_mlm(model, dataloader, tokenizer, use_fp16=True):
     
     return avg_mlm_loss, accuracy
 
-def evaluate_supersense(model, dataloader, use_fp16=True):
+def evaluate_supersense(model, dataloader, tokenizer, use_fp16=True):
     """Evaluate the supersense classification performance of the model."""
     model.eval()
     total_supersense_loss = 0
@@ -562,6 +562,11 @@ def evaluate_supersense(model, dataloader, use_fp16=True):
             total_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
             
             # Get predictions
+            if total_predictions == 0:
+                wandb.log({
+                    "input_ids": tokenizer.decode(input_ids[0]),
+                    "supersense_probs": outputs["supersense_probs"][0]
+                })
             supersense_probs = outputs["supersense_probs"]
             predicted_supersense = (supersense_probs > 0.5).float()
             
@@ -715,7 +720,7 @@ def main():
     
     if args.supersense:
         print("\nEvaluating supersense classification performance...")
-        supersense_loss, supersense_accuracy = evaluate_supersense(model, val_dataloader, use_fp16=args.fp16)
+        supersense_loss, supersense_accuracy = evaluate_supersense(model, val_dataloader, tokenizer, use_fp16=args.fp16)
         wandb.log({
             "final/supersense_loss": supersense_loss,
             "final/supersense_accuracy": supersense_accuracy
