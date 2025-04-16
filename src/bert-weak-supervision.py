@@ -11,6 +11,7 @@ from transformers import (
     get_linear_schedule_with_warmup
 )
 from torch.optim import AdamW
+from torch.amp import autocast, GradScaler
 import os
 import json
 from tqdm import tqdm
@@ -275,6 +276,9 @@ def train_model(model, train_dataloader, val_dataloader=None):
         optimizer, num_warmup_steps=WARMUP_STEPS, num_training_steps=num_training_steps
     )
     
+    # Initialize gradient scaler for mixed precision training
+    scaler = GradScaler()
+    
     # Training loop
     for epoch in range(NUM_EPOCHS):
         model.train()
@@ -293,26 +297,34 @@ def train_model(model, train_dataloader, val_dataloader=None):
             else:
                 supersense_labels = None
             diff_labels = batch["diff_labels"].to(device)
-            # Forward pass
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-                supersense_labels=supersense_labels,
-                diff_labels=diff_labels
-            )
             
-            loss = outputs["loss"]
-            mlm_loss = outputs["mlm_loss"]
-            supersense_loss = outputs["supersense_loss"]
-            diff_loss = outputs["diff_loss"]
-            # Backward pass
-            loss.backward()
-            
-            # Update weights
-            optimizer.step()
-            scheduler.step()
+            # Zero gradients
             optimizer.zero_grad()
+            
+            # Forward pass with mixed precision
+            with autocast(device_type=device.type):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                    supersense_labels=supersense_labels,
+                    diff_labels=diff_labels
+                )
+                
+                loss = outputs["loss"]
+                mlm_loss = outputs["mlm_loss"]
+                supersense_loss = outputs["supersense_loss"]
+                diff_loss = outputs["diff_loss"]
+            
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
+            
+            # Update weights with gradient scaling
+            scaler.step(optimizer)
+            scaler.update()
+            
+            # Update learning rate
+            scheduler.step()
             
             # Update progress bar
             total_loss += loss.item()
@@ -373,14 +385,16 @@ def train_model(model, train_dataloader, val_dataloader=None):
                     else:
                         supersense_labels = None
                     diff_labels = batch["diff_labels"].to(device)
-                    # Forward pass
-                    outputs = model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        labels=labels,
-                        supersense_labels=supersense_labels,
-                        diff_labels=diff_labels
-                    )
+                    
+                    # Forward pass with mixed precision
+                    with autocast(device_type=device.type):
+                        outputs = model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            labels=labels,
+                            supersense_labels=supersense_labels,
+                            diff_labels=diff_labels
+                        )
                     
                     loss = outputs["loss"]
                     mlm_loss = outputs["mlm_loss"]
@@ -391,6 +405,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
                     val_mlm_loss += mlm_loss.item()
                     val_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
                     val_diff_loss += diff_loss.item() if diff_loss is not None else 0
+                    
                     # Calculate supersense accuracy
                     if supersense_loss is not None:
                         supersense_probs = outputs["supersense_probs"]
@@ -436,7 +451,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
                 print(f"Supersense Classification Exact Match Accuracy: {supersense_accuracy:.4f}")
                 val_metrics.update({
                     f"val/supersense_loss": avg_val_supersense_loss,
-                    f"val/supersense_accuracy": supersense_accuracy,
+                    f"val/supersense_accuracy": supersense_accuracy
                 })
 
             if total_diff > 0:
@@ -473,12 +488,13 @@ def evaluate_mlm(model, dataloader, tokenizer):
 
             mask_positions = (input_ids == tokenizer.mask_token_id)
             
-            # Forward pass
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels
-            )
+            # Forward pass with mixed precision
+            with autocast(device_type=device.type):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
             
             mlm_loss = outputs["mlm_loss"]
             total_mlm_loss += mlm_loss.item()
@@ -514,12 +530,13 @@ def evaluate_supersense(model, dataloader):
             attention_mask = batch["attention_mask"].to(device)
             supersense_labels = batch["supersense_labels"].to(device)
             
-            # Forward pass
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                supersense_labels=supersense_labels
-            )
+            # Forward pass with mixed precision
+            with autocast(device_type=device.type):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    supersense_labels=supersense_labels
+                )
             
             supersense_loss = outputs["supersense_loss"]
             total_supersense_loss += supersense_loss.item() if supersense_loss is not None else 0
@@ -553,7 +570,7 @@ def evaluate_supersense(model, dataloader):
     
     avg_supersense_loss = total_supersense_loss / len(dataloader)
     exact_match_accuracy = exact_match_correct / total_predictions if total_predictions > 0 else 0
-
+    
     print(f"Supersense Classification Loss: {avg_supersense_loss:.4f}")
     print(f"Supersense Classification Exact Match Accuracy: {exact_match_accuracy:.4f}")
     
@@ -584,12 +601,14 @@ def evaluate_diff(model, dataloader):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             diff_labels = batch["diff_labels"].to(device)
-            # Forward pass
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                diff_labels=diff_labels
-            )
+            
+            # Forward pass with mixed precision
+            with autocast(device_type=device.type):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    diff_labels=diff_labels
+                )
 
             diff_loss = outputs["diff_loss"]
             total_diff_loss += diff_loss.item() if diff_loss is not None else 0
@@ -616,6 +635,7 @@ def main():
     parser.add_argument("--mask", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="semantic-difference")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--fp16", action="store_true", help="Use fp16 precision", default=True)
     args = parser.parse_args()
     
     # Initialize wandb
@@ -633,12 +653,19 @@ def main():
             "num_epochs": NUM_EPOCHS,
             "learning_rate": LEARNING_RATE,
             "warmup_steps": WARMUP_STEPS,
-            "mlm_probability": MLM_PROBABILITY
+            "mlm_probability": MLM_PROBABILITY,
+            "fp16": args.fp16
         }
     )
     
     # Initialize model
     model = MultiTaskBertModel(args.model).to(device)
+    
+    # Convert model to fp16 if requested
+    if args.fp16:
+        print("Converting model to fp16 precision")
+        model = model.half()
+    
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     if args.target:
