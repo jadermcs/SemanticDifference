@@ -2,10 +2,7 @@
 # coding: utf-8
 import argparse
 import torch
-import os
 import json
-import numpy as np
-from pathlib import Path
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -30,7 +27,7 @@ def load_data(datasets, split="train", mark_target=False):
     """Load and process the WiC dataset."""
     data = []
     for dataset in datasets.split(","):
-        with open(f"{dataset}.{split}.json", 'r') as f:
+        with open(f"data/{dataset}.{split}.json", 'r') as f:
             data.extend(json.load(f))
         
     # Convert to Hugging Face dataset format
