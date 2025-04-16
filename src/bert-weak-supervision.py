@@ -65,10 +65,10 @@ NUM_SUPERSENSE_CLASSES = len(SUPERSENSE_CLASSES)
 print(f"Found {NUM_SUPERSENSE_CLASSES} supersense classes: {SUPERSENSE_CLASSES}")
 
 class MultiTaskBertModel(nn.Module):
-    def __init__(self, model_name, num_supersense_classes=NUM_SUPERSENSE_CLASSES):
+    def __init__(self, model_name, num_supersense_classes=NUM_SUPERSENSE_CLASSES, fp16=True):
         super().__init__()
         # Load pre-trained BERT model
-        self.bert = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
+        self.bert = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True, torch_dtype=torch.float16 if fp16 else None)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
         # Supersense classification head - now applied to each token position
@@ -266,7 +266,7 @@ class WordNetDataset(Dataset):
             "diff_labels": float(item["LABEL"] == "identical")
         }
 
-def train_model(model, train_dataloader, val_dataloader=None):
+def train_model(model, train_dataloader, val_dataloader=None, use_fp16=True):
     """Train the multi-task BERT model."""
     optimizer = AdamW(model.parameters(), lr=LEARNING_RATE)
     
@@ -277,7 +277,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
     )
     
     # Initialize gradient scaler for mixed precision training
-    scaler = GradScaler()
+    scaler = GradScaler() if use_fp16 else None
     
     # Training loop
     for epoch in range(NUM_EPOCHS):
@@ -301,8 +301,17 @@ def train_model(model, train_dataloader, val_dataloader=None):
             # Zero gradients
             optimizer.zero_grad()
             
-            # Forward pass with mixed precision
-            with autocast(device_type=device.type):
+            # Forward pass with mixed precision if enabled
+            if use_fp16:
+                with autocast(device_type=device.type):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        supersense_labels=supersense_labels,
+                        diff_labels=diff_labels
+                    )
+            else:
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -311,17 +320,19 @@ def train_model(model, train_dataloader, val_dataloader=None):
                     diff_labels=diff_labels
                 )
                 
-                loss = outputs["loss"]
-                mlm_loss = outputs["mlm_loss"]
-                supersense_loss = outputs["supersense_loss"]
-                diff_loss = outputs["diff_loss"]
+            loss = outputs["loss"]
+            mlm_loss = outputs["mlm_loss"]
+            supersense_loss = outputs["supersense_loss"]
+            diff_loss = outputs["diff_loss"]
             
-            # Backward pass with gradient scaling
-            scaler.scale(loss).backward()
-            
-            # Update weights with gradient scaling
-            scaler.step(optimizer)
-            scaler.update()
+            # Backward pass with gradient scaling if using fp16
+            if use_fp16:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
             
             # Update learning rate
             scheduler.step()
@@ -386,8 +397,17 @@ def train_model(model, train_dataloader, val_dataloader=None):
                         supersense_labels = None
                     diff_labels = batch["diff_labels"].to(device)
                     
-                    # Forward pass with mixed precision
-                    with autocast(device_type=device.type):
+                    # Forward pass with mixed precision if enabled
+                    if use_fp16:
+                        with autocast(device_type=device.type):
+                            outputs = model(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                labels=labels,
+                                supersense_labels=supersense_labels,
+                                diff_labels=diff_labels
+                            )
+                    else:
                         outputs = model(
                             input_ids=input_ids,
                             attention_mask=attention_mask,
@@ -471,7 +491,7 @@ def train_model(model, train_dataloader, val_dataloader=None):
             torch.save(model.state_dict(), checkpoint_path)
         
 
-def evaluate_mlm(model, dataloader, tokenizer):
+def evaluate_mlm(model, dataloader, tokenizer, use_fp16=True):
     """Evaluate the MLM performance of the model."""
     model.eval()
     total_mlm_loss = 0
@@ -488,8 +508,15 @@ def evaluate_mlm(model, dataloader, tokenizer):
 
             mask_positions = (input_ids == tokenizer.mask_token_id)
             
-            # Forward pass with mixed precision
-            with autocast(device_type=device.type):
+            # Forward pass with mixed precision if enabled
+            if use_fp16:
+                with autocast(device_type=device.type):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels
+                    )
+            else:
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -512,7 +539,7 @@ def evaluate_mlm(model, dataloader, tokenizer):
     
     return avg_mlm_loss, accuracy
 
-def evaluate_supersense(model, dataloader):
+def evaluate_supersense(model, dataloader, use_fp16=True):
     """Evaluate the supersense classification performance of the model."""
     model.eval()
     total_supersense_loss = 0
@@ -530,8 +557,15 @@ def evaluate_supersense(model, dataloader):
             attention_mask = batch["attention_mask"].to(device)
             supersense_labels = batch["supersense_labels"].to(device)
             
-            # Forward pass with mixed precision
-            with autocast(device_type=device.type):
+            # Forward pass with mixed precision if enabled
+            if use_fp16:
+                with autocast(device_type=device.type):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        supersense_labels=supersense_labels
+                    )
+            else:
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -587,7 +621,7 @@ def evaluate_supersense(model, dataloader):
     
     return avg_supersense_loss, exact_match_accuracy
 
-def evaluate_diff(model, dataloader):
+def evaluate_diff(model, dataloader, use_fp16=True):
     """Evaluate the difference classification performance of the model."""
     model.eval()
     total_diff_loss = 0
@@ -602,8 +636,15 @@ def evaluate_diff(model, dataloader):
             attention_mask = batch["attention_mask"].to(device)
             diff_labels = batch["diff_labels"].to(device)
             
-            # Forward pass with mixed precision
-            with autocast(device_type=device.type):
+            # Forward pass with mixed precision if enabled
+            if use_fp16:
+                with autocast(device_type=device.type):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        diff_labels=diff_labels
+                    )
+            else:
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -659,12 +700,7 @@ def main():
     )
     
     # Initialize model
-    model = MultiTaskBertModel(args.model).to(device)
-    
-    # Convert model to fp16 if requested
-    if args.fp16:
-        print("Converting model to fp16 precision")
-        model = model.half()
+    model = MultiTaskBertModel(args.model, fp16=args.fp16).to(device)
     
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -681,11 +717,11 @@ def main():
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     # Train model
-    train_model(model, train_dataloader, val_dataloader)
+    train_model(model, train_dataloader, val_dataloader, use_fp16=args.fp16)
     
     # Evaluate model
     print("\nEvaluating MLM performance...")
-    mlm_loss, mlm_accuracy = evaluate_mlm(model, val_dataloader, tokenizer)
+    mlm_loss, mlm_accuracy = evaluate_mlm(model, val_dataloader, tokenizer, use_fp16=args.fp16)
     wandb.log({
         "final/mlm_loss": mlm_loss,
         "final/mlm_accuracy": mlm_accuracy
@@ -693,14 +729,14 @@ def main():
     
     if args.supersense:
         print("\nEvaluating supersense classification performance...")
-        supersense_loss, supersense_accuracy = evaluate_supersense(model, val_dataloader)
+        supersense_loss, supersense_accuracy = evaluate_supersense(model, val_dataloader, use_fp16=args.fp16)
         wandb.log({
             "final/supersense_loss": supersense_loss,
             "final/supersense_accuracy": supersense_accuracy
         })
 
     print("\nEvaluating difference classification performance...")
-    diff_loss, diff_accuracy = evaluate_diff(model, val_dataloader)
+    diff_loss, diff_accuracy = evaluate_diff(model, val_dataloader, use_fp16=args.fp16)
     wandb.log({
         "final/diff_loss": diff_loss,
         "final/diff_accuracy": diff_accuracy
