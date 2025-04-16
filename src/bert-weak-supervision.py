@@ -33,7 +33,6 @@ print(f"Using device: {device}")
 
 # Constants
 MAX_LENGTH = 128
-BATCH_SIZE = 16
 NUM_EPOCHS = 30
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
@@ -112,9 +111,7 @@ class MultiTaskBertModel(nn.Module):
             # Apply mask to logits and labels
             masked_logits = supersense_logits * mask
             masked_labels = supersense_labels * mask
-            
             # Calculate binary cross entropy loss for multilabel classification
-            # We need to handle the special value -100 in the labels
             valid_positions = (masked_labels != -100)
             
             # Only compute loss on valid positions
@@ -152,12 +149,11 @@ class MultiTaskBertModel(nn.Module):
         }
 
 class WordNetDataset(Dataset):
-    def __init__(self, tokenizer, dataset=["wordnet"], max_length=MAX_LENGTH, split="train", supersense=False, target=True, mask=False):
+    def __init__(self, tokenizer, dataset=["wordnet"], max_length=MAX_LENGTH, split="train", supersense=False, target=True):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.supersense = supersense
         self.target = target
-        self.mask = mask
         self.data = []
         # Check if dataset is a list of files
         for file in dataset:
@@ -196,23 +192,23 @@ class WordNetDataset(Dataset):
         )
 
         offsets = original_encoding["offset_mapping"][0]
-        
-        # Find the position of the [MASK] token in the masked text
-        mask_token_id = self.tokenizer.mask_token_id
-        masked_input_ids = original_encoding["input_ids"][0].clone()
-        
-        # Mask the target word
-        if self.mask:
-            word = item["WORD_x"] if item["WORD_x"] in item["text"] else item["WORD_y"]
-            word_start = item["text"].index(word)
-            word_end = word_start + len(word)
-            mask_indices = [i for i, (start, end) in enumerate(offsets) if start >= word_start and end <= word_end]
-            masked_input_ids[mask_indices] = mask_token_id
-            assert len(masked_input_ids) == len(original_encoding["input_ids"][0]), "Masked input ids and original input ids have different lengths"
+
+
+
+        special_tokens = [
+            self.tokenizer.cls_token_id,
+            self.tokenizer.sep_token_id,
+            self.tokenizer.pad_token_id,
+            self.tokenizer.mask_token_id,
+            "[TGT]",
+            "[/TGT]"
+        ]
         
         # Mask other tokens
+        masked_input_ids = original_encoding["input_ids"][0].clone()
+        valid_positions = masked_input_ids != self.tokenizer.pad_token_id
         random_mask_indices = torch.rand(len(masked_input_ids)) < MLM_PROBABILITY
-        masked_input_ids[random_mask_indices] = mask_token_id
+        masked_input_ids[valid_positions & random_mask_indices] = self.tokenizer.mask_token_id
                 
         # Create multilabel supersense labels for each token position
         supersense_labels = []
@@ -223,15 +219,6 @@ class WordNetDataset(Dataset):
             words = word_tokenize(item["text"])
             
             # For each word in the text, find its supersenses
-
-            special_tokens = [
-                self.tokenizer.cls_token_id,
-                self.tokenizer.sep_token_id,
-                self.tokenizer.pad_token_id,
-                self.tokenizer.mask_token_id,
-                "[TGT]",
-                "[/TGT]"
-            ]
             for word in words:
                 # Skip special tokens and empty strings
                 if len(word) < 4 or word in special_tokens or not word.strip():
@@ -254,13 +241,13 @@ class WordNetDataset(Dataset):
                 for token_idx in word_token_indices:
                     supersense_labels[token_idx, :] = 0.0
                     supersense_labels[token_idx, word_supersense_ids] = 1.0
-            assert len(supersense_labels) == len(masked_input_ids), "Supersense labels and masked input ids have different lengths"
+            assert len(supersense_labels) == len(masked_input_ids), "Supersense labels and masked input ids have same lengths"
             
 
         return {
-            "input_ids": original_encoding["input_ids"][0],
+            "input_ids": masked_input_ids,
             "attention_mask": original_encoding["attention_mask"][0],
-            "labels": masked_input_ids,
+            "labels": original_encoding["input_ids"][0],
             "supersense_labels": supersense_labels,
             "diff_labels": float(item["LABEL"] == "identical")
         }
@@ -672,9 +659,9 @@ def main():
     parser.add_argument("--dataset", type=str, default="wic")
     parser.add_argument("--supersense", action="store_true")
     parser.add_argument("--target", action="store_true")
-    parser.add_argument("--mask", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="semantic-difference")
     parser.add_argument("--wandb_run_name", type=str, default=None)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--fp16", action="store_true", help="Use fp16 precision", default=True)
     args = parser.parse_args()
     
@@ -688,8 +675,7 @@ def main():
             "dataset": args.dataset,
             "supersense": args.supersense,
             "target": args.target,
-            "mask": args.mask,
-            "batch_size": BATCH_SIZE,
+            "batch_size": args.batch_size,
             "num_epochs": NUM_EPOCHS,
             "learning_rate": LEARNING_RATE,
             "warmup_steps": WARMUP_STEPS,
@@ -709,12 +695,12 @@ def main():
     
     # Create datasets
     args.dataset = args.dataset.split(",") if "," in args.dataset else [args.dataset]
-    train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target, mask=args.mask)
-    val_dataset = WordNetDataset(tokenizer, dataset=["wic"], split="test", supersense=args.supersense, target=args.target, mask=args.mask)
+    train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target)
+    val_dataset = WordNetDataset(tokenizer, dataset=["wic"], split="test", supersense=args.supersense, target=args.target)
     
     # Create dataloaders
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
     # Train model
     train_model(model, train_dataloader, val_dataloader, use_fp16=args.fp16)

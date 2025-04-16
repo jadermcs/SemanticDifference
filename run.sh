@@ -1,36 +1,18 @@
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --wandb_run_name "roberta-large-wic"
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --mask --wandb_run_name "roberta-large-wic-mask"
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --target --wandb_run_name "roberta-large-wic-target"
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --supersense --wandb_run_name "roberta-large-wic-supersense"
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --mask --target --wandb_run_name "roberta-large-wic-mask-target"
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --mask --supersense --wandb_run_name "roberta-large-wic-mask-supersense"
-# python src/bert-weak-supervision.py --model FacebookAI/roberta-large --dataset wic --target --supersense --wandb_run_name "roberta-large-wic-target-supersense"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --wandb_run_name "roberta-base-fews-masc-semcor"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --mask --wandb_run_name "roberta-base-fews-masc-semcor-mask"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --target --wandb_run_name "roberta-base-fews-masc-semcor-target"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --supersense --wandb_run_name "roberta-base-fews-masc-semcor-supersense"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --mask --target --wandb_run_name "roberta-base-fews-masc-semcor-mask-target"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --mask --supersense --wandb_run_name "roberta-base-fews-masc-semcor-mask-supersense"
+python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wic,semcor --target --supersense --wandb_run_name "roberta-base-fews-masc-semcor-target-supersense"
 
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --wandb_run_name "roberta-base-fews-masc-semcor"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --mask --wandb_run_name "roberta-base-fews-masc-semcor-mask"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --target --wandb_run_name "roberta-base-fews-masc-semcor-target"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --supersense --wandb_run_name "roberta-base-fews-masc-semcor-supersense"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --mask --target --wandb_run_name "roberta-base-fews-masc-semcor-mask-target"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --mask --supersense --wandb_run_name "roberta-base-fews-masc-semcor-mask-supersense"
-python src/bert-weak-supervision.py --model FacebookAI/roberta-base --dataset fews,masc,semcor --target --supersense --wandb_run_name "roberta-base-fews-masc-semcor-target-supersense"
-
-
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet --mask
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet --target
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet --supersense
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet --mask --target
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet --mask --supersense
-# python bert-weak-supervision.py --model FacebookAI/roberta-base --dataset wordnet --target --supersense
-
-
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --wandb_run_name "ModernBERT-large-wic"
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --mask --wandb_run_name "ModernBERT-large-wic-mask"
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --target --wandb_run_name "ModernBERT-large-wic-target"
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --supersense --wandb_run_name "ModernBERT-large-wic-supersense"
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --mask --target --wandb_run_name "ModernBERT-large-wic-mask-target"
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --mask --supersense --wandb_run_name "ModernBERT-large-wic-mask-supersense"
-# python src/bert-weak-supervision.py --model answerdotai/ModernBERT-large --dataset wic --target --supersense --wandb_run_name "ModernBERT-large-wic-target-supersense"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --wandb_run_name "ModernBERT-base-fews-masc-semcor"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --mask --wandb_run_name "ModernBERT-base-fews-masc-semcor-mask"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --target --wandb_run_name "ModernBERT-base-fews-masc-semcor-target"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --supersense --wandb_run_name "ModernBERT-base-fews-masc-semcor-supersense"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --mask --target --wandb_run_name "ModernBERT-base-fews-masc-semcor-mask-target"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --mask --supersense --wandb_run_name "ModernBERT-base-fews-masc-semcor-mask-supersense"
+python src/bert-weak-supervision.py --model answerdotai/ModernBERT-base --dataset wic,semcor --target --supersense --wandb_run_name "ModernBERT-base-fews-masc-semcor-target-supersense"
 
 # python bert-weak-supervision.py --model microsoft/deberta-v3-base --dataset wic
 # python bert-weak-supervision.py --model microsoft/deberta-v3-base --dataset wic --mask
