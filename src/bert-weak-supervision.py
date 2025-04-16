@@ -65,10 +65,10 @@ NUM_SUPERSENSE_CLASSES = len(SUPERSENSE_CLASSES)
 print(f"Found {NUM_SUPERSENSE_CLASSES} supersense classes: {SUPERSENSE_CLASSES}")
 
 class MultiTaskBertModel(nn.Module):
-    def __init__(self, model_name, num_supersense_classes=NUM_SUPERSENSE_CLASSES, fp16=True):
+    def __init__(self, model_name, num_supersense_classes=NUM_SUPERSENSE_CLASSES):
         super().__init__()
         # Load pre-trained BERT model
-        self.bert = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True, torch_dtype=torch.float16 if fp16 else None)
+        self.bert = AutoModelForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
         # Supersense classification head - now applied to each token position
@@ -700,7 +700,7 @@ def main():
     )
     
     # Initialize model
-    model = MultiTaskBertModel(args.model, fp16=args.fp16).to(device)
+    model = MultiTaskBertModel(args.model).to(device)
     
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model)
