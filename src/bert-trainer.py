@@ -117,7 +117,7 @@ def main():
     tokenized_dataset = datasets.map(
         lambda x: preprocess_function(x, tokenizer),
         batched=True,
-        remove_columns=datasets.column_names
+        remove_columns=datasets["train"].column_names
     )
     
     # Initialize model
