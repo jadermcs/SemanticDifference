@@ -24,9 +24,9 @@ print(f"Using device: {device}")
 MAX_LENGTH = 128
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
-NUM_EPOCHS = 3
+NUM_EPOCHS = 10
 
-def load_data(datasets, split="train"):
+def load_data(datasets, split="train", mark_target=False):
     """Load and process the WiC dataset."""
     data = []
     for dataset in datasets.split(","):
@@ -37,10 +37,8 @@ def load_data(datasets, split="train"):
     processed_data = []
     for item in data:
         processed_data.append({
-            'sentence1': item['USAGE_x'],
-            'sentence2': item['USAGE_y'],
-            'word1': item['WORD_x'],
-            'word2': item['WORD_y'],
+            'sentence1': item['USAGE_x'].replace(item['WORD_x'], f"[TGT]{item['WORD_x']}[/TGT]"),
+            'sentence2': item['USAGE_y'].replace(item['WORD_y'], f"[TGT]{item['WORD_y']}[/TGT]"),
             'label': 1 if item['LABEL'] == 'identical' else 0
         })
     
@@ -76,6 +74,8 @@ def main():
                         help='Pre-trained model to use')
     parser.add_argument('--dataset', type=str, default='wic',
                         help='Path to the dataset file')
+    parser.add_argument('--mark_target', action='store_true', default=False,
+                        help='Mark the target word in the sentences')
     parser.add_argument('--output_dir', type=str, default='output/bert-classifier',
                         help='Directory to save the model')
     parser.add_argument('--wandb_project', type=str, default='semantic-difference',
@@ -105,8 +105,8 @@ def main():
     )
     
     # Load dataset
-    train_dataset = load_data(args.dataset, split="train")
-    test_dataset = load_data(args.dataset, split="test")
+    train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
+    test_dataset = load_data(args.dataset, split="test", mark_target=args.mark_target)
 
     datasets = DatasetDict({
         "train": train_dataset,
