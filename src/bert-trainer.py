@@ -43,13 +43,16 @@ def load_data(datasets, split="train", mark_target=False):
 
 def preprocess_function(examples, tokenizer):
     """Tokenize the input sentences."""
-    return tokenizer(
+    labels = examples['label']
+    examples = tokenizer(
         examples['sentence1'],
         examples['sentence2'],
         truncation=True,
         max_length=MAX_LENGTH,
         padding='max_length'
     )
+    examples['labels'] = labels
+    return examples
 
 def compute_metrics(pred):
     """Compute metrics for evaluation."""
