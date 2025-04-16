@@ -152,17 +152,18 @@ class MultiTaskBertModel(nn.Module):
         }
 
 class WordNetDataset(Dataset):
-    def __init__(self, tokenizer, dataset="wordnet", max_length=MAX_LENGTH, split="train", supersense=False, target=True, mask=False):
+    def __init__(self, tokenizer, dataset=["wordnet"], max_length=MAX_LENGTH, split="train", supersense=False, target=True, mask=False):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.supersense = supersense
         self.target = target
         self.mask = mask
-        # Load WordNet data
-        data_file = f"data/{dataset}.{split}.json"
-        if os.path.exists(data_file):
+        self.data = []
+        # Check if dataset is a list of files
+        for file in dataset:
+            data_file = f"data/{file}.{split}.json"
             with open(data_file, 'r') as f:
-                self.data = json.load(f)
+                self.data.extend(json.load(f))
             data = []
             for item in self.data:
                 if self.target:
@@ -171,8 +172,6 @@ class WordNetDataset(Dataset):
                 item["text"] = item["USAGE_x"] + tokenizer.sep_token + item["USAGE_y"]
                 data.append(item)
             self.data = data
-        else:
-            raise FileNotFoundError(f"Data file {data_file} not found")
         
         print(f"Loaded {len(self.data)} examples from {split} set")
 
@@ -709,8 +708,9 @@ def main():
         model.bert.resize_token_embeddings(len(tokenizer))
     
     # Create datasets
+    args.dataset = args.dataset.split(",") if "," in args.dataset else [args.dataset]
     train_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="train", supersense=args.supersense, target=args.target, mask=args.mask)
-    val_dataset = WordNetDataset(tokenizer, dataset=args.dataset, split="test", supersense=args.supersense, target=args.target, mask=args.mask)
+    val_dataset = WordNetDataset(tokenizer, dataset=["wic"], split="test", supersense=args.supersense, target=args.target, mask=args.mask)
     
     # Create dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
