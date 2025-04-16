@@ -7,3 +7,7 @@ pandas
 nltk
 transformers
 datasets
+wandb
+scikit-learn
+numpy
+tqdm
