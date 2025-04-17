@@ -234,10 +234,9 @@ def main():
         compute_metrics=compute_metrics, # Define function to calc cls + mlm metrics (perplexity)
     )
 
-    
     # Train the model
     trainer.train()
-    
+
     # Evaluate the model
     metrics = trainer.evaluate()
     

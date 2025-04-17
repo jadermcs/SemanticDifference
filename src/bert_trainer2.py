@@ -73,7 +73,7 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
         data = {
             'sentence1': s1,
             'sentence2': s2,
-            'label_diff': 1 if item['LABEL'] == 'identical' else 0
+            'labels': 1 if item['LABEL'] == 'identical' else 0
         }
         if supersense:
             s1 = word_tokenize(s1)
@@ -91,7 +91,7 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
 
 def preprocess_function(examples, tokenizer, supersense=False):
     """Tokenize the input sentences."""
-    labels = examples['label_diff']
+    labels = examples['labels']
     if supersense:
         s1 = examples['supersense1']
         s2 = examples['supersense2']
@@ -119,7 +119,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 new_supersenses.append(supersenses[word_id])
         examples['supersenses'] = new_supersenses
 
-    examples['label_diff'] = labels
+    examples['labels'] = labels
     return examples
 
 
