@@ -129,6 +129,8 @@ def compute_metrics(pred):
     """Compute metrics for evaluation."""
     labels = pred.label_ids
     preds = pred.predictions.argmax(-1)
+    print(labels.shape)
+    print(preds.shape)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
     acc = accuracy_score(labels, preds)
 
@@ -234,7 +236,7 @@ class CustomMultiTaskModel(nn.Module):
             seq_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
             total_loss += seq_loss
         if labels is not None and sequence_labels is not None and token_labels is not None:
-            print(rodou)
+            print("rodou")
             loss_fct = nn.CrossEntropyLoss() # Common loss function
             bce_loss = nn.BCEWithLogitsLoss()
 
