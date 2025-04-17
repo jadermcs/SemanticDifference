@@ -234,6 +234,7 @@ class CustomMultiTaskModel(nn.Module):
             seq_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
             total_loss += seq_loss
         if labels is not None and sequence_labels is not None and token_labels is not None:
+            print(rodou)
             loss_fct = nn.CrossEntropyLoss() # Common loss function
             bce_loss = nn.BCEWithLogitsLoss()
 
