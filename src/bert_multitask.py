@@ -57,8 +57,8 @@ class DataCollatorForJointMLMClassification:
             batch["labels"] = torch.full_like(batch["input_ids"], -100)
 
         # Add back the classification labels as tensors
-        batch["labels_diff"] = torch.tensor(label_diff_list, dtype=torch.long)
-        batch["labels_supersense"] = torch.tensor(label_supersense_list, dtype=torch.long)
+        batch["sequence_labels"] = torch.tensor(label_diff_list, dtype=torch.long)
+        batch["token_labels"] = torch.tensor(label_supersense_list, dtype=torch.long)
 
         return batch
 
@@ -235,12 +235,11 @@ from torch.nn import CrossEntropyLoss
 class MultitaskTrainerJoint(Trainer): # Renamed for clarity
     def compute_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
         # Extract all labels. The collator ensures these keys exist.
-        labels_diff = inputs.pop("labels_diff", None)
-        labels_supersense = inputs.pop("labels_supersense", None)
-        mlm_labels = inputs.pop("labels", None)
+        sequence_labels = inputs.pop("sequence_labels", None)
+        token_labels = inputs.pop("token_labels", None)
+        labels = inputs.pop("labels", None)
 
         # Forward pass - Model gets potentially masked input_ids
-        print(inputs)
         outputs = model(**inputs, return_dict=True)
 
         # Extract logits (ensure keys match your MultitaskOutput and model forward pass)
@@ -252,42 +251,42 @@ class MultitaskTrainerJoint(Trainer): # Renamed for clarity
         loss_fct = CrossEntropyLoss() # Use appropriate loss, potentially different ones per task
 
         # --- Calculate Loss for Each Task ---
-        # Diff Task Loss (calculated if labels_diff is provided and not -100)
-        if labels_diff is not None and sequence_logits is not None:
+        # Sequence Task Loss (calculated if sequence_labels is provided and not -100)
+        if sequence_labels is not None and sequence_logits is not None:
             # Filter out samples with ignore_index if used (e.g., -100)
-            active_loss_diff = labels_diff.view(-1) != -100
+            active_loss_diff = sequence_labels.view(-1) != -100
             if active_loss_diff.sum() > 0 :
                 active_logits = sequence_logits.view(-1, self.model.num_sequence_labels)[active_loss_diff]
-                active_labels = labels_diff.view(-1)[active_loss_diff]
+                active_labels = sequence_labels.view(-1)[active_loss_diff]
                 # Ensure active_labels are within the valid range [0, num_labels_diff-1]
                 if torch.all(active_labels >= 0) and torch.all(active_labels < self.model.num_sequence_labels):
                      total_loss += loss_fct(active_logits, active_labels) * 0.5 # Example weighting
                 # else: print warning or handle invalid labels
-            elif labels_diff.numel() > 0 and torch.all(labels_diff == -100):
+            elif sequence_labels.numel() > 0 and torch.all(sequence_labels == -100):
                  total_loss += 0.0 * sequence_logits.sum() # Handle batches with only ignored labels
 
-        # Supersense Task Loss (calculated if labels_supersense is provided and not -100)
-        if labels_supersense is not None and token_logits is not None:
-            active_loss_ss = labels_supersense.view(-1) != -100
+        # Token Task Loss (calculated if token_labels is provided and not -100)
+        if token_labels is not None and token_logits is not None:
+            active_loss_ss = token_labels.view(-1) != -100
             if active_loss_ss.sum() > 0:
                 active_logits = token_logits.view(-1, self.model.num_token_labels)[active_loss_ss]
-                active_labels = labels_supersense.view(-1)[active_loss_ss]
+                active_labels = token_labels.view(-1)[active_loss_ss]
                 # Ensure active_labels are within the valid range [0, num_labels_supersense-1]
                 if torch.all(active_labels >= 0) and torch.all(active_labels < self.model.num_token_labels):
                     total_loss += loss_fct(active_logits, active_labels) * 0.5 # Example weighting
                 # else: print warning or handle invalid labels
-            elif labels_supersense.numel() > 0 and torch.all(labels_supersense == -100):
+            elif token_labels.numel() > 0 and torch.all(token_labels == -100):
                  total_loss += 0.0 * token_logits.sum() # Handle batches with only ignored labels
 
-        # MLM Task Loss (calculated only for masked tokens where mlm_labels != -100)
-        if mlm_labels is not None and mlm_logits is not None:
-            active_loss_mlm = mlm_labels.view(-1) != -100
+        # MLM Task Loss (calculated only for masked tokens where labels != -100)
+        if labels is not None and mlm_logits is not None:
+            active_loss_mlm = labels.view(-1) != -100
             if active_loss_mlm.sum() > 0:
                 active_logits = mlm_logits.view(-
                 1, self.model.config.vocab_size)[active_loss_mlm]
-                active_labels = mlm_labels.view(-1)[active_loss_mlm]
+                active_labels = labels.view(-1)[active_loss_mlm]
                 total_loss += loss_fct(active_logits, active_labels) * 1.0 # Example weighting
-            elif mlm_labels.numel() > 0 and torch.all(mlm_labels == -100):
+            elif labels.numel() > 0 and torch.all(labels == -100):
                  total_loss += 0.0 * mlm_logits.sum() # Ensure graph connectivity
 
         return (total_loss, outputs) if return_outputs else total_loss
