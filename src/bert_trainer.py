@@ -201,7 +201,7 @@ def main():
         output_dir=args.output_dir,
         learning_rate=LEARNING_RATE,
         per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size//2,
         num_train_epochs=NUM_EPOCHS,
         weight_decay=0.01,
         eval_strategy="steps",
