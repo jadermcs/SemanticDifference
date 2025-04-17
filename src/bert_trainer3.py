@@ -139,6 +139,134 @@ def compute_metrics(pred):
         'recall': recall
     }
 
+import torch.nn as nn
+from transformers import AutoConfig, AutoModelForMaskedLM
+from transformers.modeling_outputs import ModelOutput
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+
+@dataclass
+class MultiTaskModelOutput(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    mlm_logits: torch.FloatTensor = None
+    sequence_logits: torch.FloatTensor = None
+    token_logits: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+class CustomMultiTaskModel(nn.Module):
+    def __init__(self, model_name_or_path, num_sequence_labels, num_token_labels, loss_weights=None):
+        super().__init__()
+        self.config = AutoConfig.from_pretrained(model_name_or_path)
+        self.model = AutoModelForMaskedLM.from_pretrained(model_name_or_path, config=self.config) # Or your specific base model
+
+        # MLM Head (often part of the base model architecture for BERT-like models, e.g., via BertLMPredictionHead)
+        # If using AutoModel, you might need to add the MLM head manually or use BertForMaskedLM as the base and access its components.
+        # For simplicity, let's assume we might need to re-implement or fetch it if not using BertForMaskedLM directly.
+        # We'll assume self.bert has or we add an MLM prediction capability later if needed.
+        # A dedicated MLM head might look like this if needed:
+
+        # Sequence Classification Head
+        self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels)
+
+        # Token Classification Head
+        self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels)
+
+        self.num_sequence_labels = num_sequence_labels
+        self.num_token_labels = num_token_labels
+
+        # Loss weights (optional, for combining losses)
+        self.loss_weights = loss_weights if loss_weights else {"mlm": 1.0, "seq": 1.0, "token": 1.0}
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,        # Labels for MLM
+        sequence_labels=None, # Labels for sequence classification
+        token_labels=None,    # Labels for token classification
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=True,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs.hidden_states[-1] # Last hidden state (batch_size, sequence_length, hidden_size)
+        
+        # --- Calculate Logits ---
+        # MLM Logits (predicting masked tokens)
+        # If using BertForMaskedLM, this would be handled differently.
+        # If using AutoModel, apply the head. Note: this is a simplification.
+        # A proper MLM head often involves transformations + LayerNorm + bias.
+        mlm_logits = outputs.logits
+
+        # Sequence Classification Logits
+        sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
+        # Token Classification Logits
+        token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
+
+        # --- Calculate Losses ---
+        total_loss = 0.0
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss() # Common loss function
+            seq_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
+            total_loss += seq_loss
+        if labels is not None and sequence_labels is not None and token_labels is not None:
+            loss_fct = nn.CrossEntropyLoss() # Common loss function
+            bce_loss = nn.BCEWithLogitsLoss()
+
+            # MLM Loss
+            mlm_loss = loss_fct(mlm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+
+            # Token Classification Loss (ignoring padding, typically -100)
+            # Only compute loss for non-special tokens if needed
+            active_loss = attention_mask.view(-1) == 1 # Or based on token_labels != -100
+            active_logits = token_logits.view(-1, self.num_token_labels)[active_loss]
+            active_labels = token_labels.view(-1)[active_loss]
+            if active_logits.shape[0] > 0: # Ensure there are valid tokens to compute loss on
+                 token_loss = bce_loss(active_logits, active_labels)
+            else:
+                 # Handle cases where the batch might only contain padding after filtering
+                 # Or if no token labels are present for the active parts
+                 token_loss = torch.tensor(0.0, device=sequence_logits.device) # Ensure loss is on the correct device
+
+
+            # Combine losses (e.g., weighted sum)
+            total_loss = (self.loss_weights["mlm"] * mlm_loss +
+                          self.loss_weights["seq"] * seq_loss +
+                          self.loss_weights["token"] * token_loss)
+
+        if not return_dict:
+            output = (mlm_logits, sequence_logits, token_logits) + outputs[1:] # Add hidden states and attentions if requested
+            return ((total_loss,) + output) if total_loss is not None else output
+
+        return MultiTaskModelOutput(
+            loss=total_loss,
+            mlm_logits=mlm_logits,
+            sequence_logits=sequence_logits,
+            token_logits=token_logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
 
 def main():
     parser = argparse.ArgumentParser(description='Train a BERT model for WiC classification')
@@ -196,9 +324,10 @@ def main():
     )
 
     # Initialize model
-    model = AutoModelForSequenceClassification.from_pretrained(
+    model = CustomMultiTaskModel(
         args.model,
-        num_labels=2
+        num_sequence_labels=2,
+        num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0
     )
     if args.mark_target:
         tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
