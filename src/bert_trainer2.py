@@ -6,11 +6,12 @@ from nltk.corpus import wordnet
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from functools import lru_cache
-from bert_multitask import CustomMultiTaskModel, DataCollatorForJointMLMClassification, MultitaskTrainerJoint
 import json
 from transformers import (
+    AutoModelForSequenceClassification,
     AutoTokenizer,
     TrainingArguments,
+    Trainer,
     set_seed
 )
 import wandb
@@ -145,7 +146,7 @@ def main():
                         help='Path to the dataset file')
     parser.add_argument('--mark_target', action='store_true', default=False,
                         help='Mark the target word in the sentences')
-    parser.add_argument('--supersense', action='store_true', default=True,
+    parser.add_argument('--supersense', action='store_true', default=False,
                         help='Use supersense classification')
     parser.add_argument('--output_dir', type=str, default='output/bert-classifier',
                         help='Directory to save the model')
@@ -192,16 +193,10 @@ def main():
         fn_kwargs={"tokenizer": tokenizer}
     )
 
-    custom_collator = DataCollatorForJointMLMClassification(
-        tokenizer=tokenizer,
-        mlm=True,
-        mlm_probability=0.15,
-    )
-    
-    model = CustomMultiTaskModel(
+    # Initialize model
+    model = AutoModelForSequenceClassification.from_pretrained(
         args.model,
-        num_sequence_labels=2,
-        num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0,
+        num_labels=2
     )
 
     # Define training arguments
@@ -219,25 +214,22 @@ def main():
         greater_is_better=True,
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
-        remove_unused_columns=False, # CRITICAL
         report_to="wandb",
         run_name=args.wandb_run_name
     )
     
     # Initialize trainer
-    trainer = MultitaskTrainerJoint(
+    trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
-        data_collator=custom_collator, # Use the custom multitask collator
-        compute_metrics=compute_metrics, # Define function to calc cls + mlm metrics (perplexity)
+        compute_metrics=compute_metrics,
     )
 
-    
     # Train the model
     trainer.train()
-    
+
     # Evaluate the model
     metrics = trainer.evaluate()
     
