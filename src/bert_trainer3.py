@@ -215,15 +215,20 @@ class CustomMultiTaskModel(nn.Module):
         # If using BertForMaskedLM, this would be handled differently.
         # If using AutoModel, apply the head. Note: this is a simplification.
         # A proper MLM head often involves transformations + LayerNorm + bias.
-        mlm_logits = outputs.logits
+        # mlm_logits = outputs.logits
 
         # Sequence Classification Logits
         sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
         # Token Classification Logits
-        token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
+        # token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
 
         # --- Calculate Losses ---
         total_loss = 0.0
+        mlm_loss = 0.0
+        seq_loss = 0.0
+        token_loss = 0.0
+        mlm_logits = None
+        token_logits = None
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss() # Common loss function
             seq_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
