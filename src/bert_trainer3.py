@@ -173,7 +173,7 @@ class CustomMultiTaskModel(nn.Module):
         self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels)
 
         # Token Classification Head
-        self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels)
+        # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels)
 
         self.num_sequence_labels = num_sequence_labels
         self.num_token_labels = num_token_labels
@@ -328,11 +328,12 @@ def main():
     )
 
     # Initialize model
-    model = CustomMultiTaskModel(
-        args.model,
-        num_sequence_labels=2,
-        num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0
-    )
+    # model = CustomMultiTaskModel(
+    #     args.model,
+    #     num_sequence_labels=2,
+    #     num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0
+    # )
+    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
         tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
         model.resize_token_embeddings(len(tokenizer))
