@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
 import torch
 import torch.nn as nn
 from transformers.modeling_outputs import ModelOutput
@@ -35,30 +36,22 @@ class DataCollatorForJointMLMClassification:
         label_diff_list = [feature["label_diff"] for feature in features]
         label_supersense_list = [feature["supersenses"] for feature in features]
 
-        # Prepare features for padding (remove scalar classification labels first)
-        keys_to_pad = ['input_ids', 'attention_mask', 'token_type_ids'] # Add others if needed
-        padding_features = [{k: v for k, v in feature.items() if k in keys_to_pad} for feature in features]
-
-        # Pad the input features
-        batch = self.tokenizer.pad(
-            padding_features,
-            padding=True, # Pad to longest in batch
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors="pt", # Return PyTorch tensors
-        )
-
+        input_ids = torch.tensor([feature["input_ids"] for feature in features], dtype=torch.long)
+        attention_mask = torch.tensor([feature["attention_mask"] for feature in features], dtype=torch.long)
+        batch = {}
         # --- Apply MLM ---
         if self.mlm:
             batch["input_ids"], batch["labels"] = self.torch_mask_tokens(
-                batch["input_ids"]
+                input_ids
             )
         else:
             # If not applying MLM, MLM labels are ignored
             batch["labels"] = torch.full_like(batch["input_ids"], -100)
+        batch["attention_mask"] = attention_mask
 
         # Add back the classification labels as tensors
         batch["sequence_labels"] = torch.tensor(label_diff_list, dtype=torch.long)
-        batch["token_labels"] = torch.tensor(label_supersense_list, dtype=torch.long)
+        batch["token_labels"] = torch.tensor(label_supersense_list, dtype=torch.float)
 
         return batch
 
@@ -187,7 +180,8 @@ class CustomMultiTaskModel(nn.Module):
         # --- Calculate Losses ---
         total_loss = None
         if labels is not None and sequence_labels is not None and token_labels is not None:
-            loss_fct = CrossEntropyLoss() # Common loss function
+            loss_fct = nn.CrossEntropyLoss() # Common loss function
+            bce_loss = nn.BCEWithLogitsLoss()
 
             # MLM Loss
             mlm_loss = loss_fct(mlm_logits.view(-1, self.config.vocab_size), labels.view(-1))
@@ -201,7 +195,7 @@ class CustomMultiTaskModel(nn.Module):
             active_logits = token_logits.view(-1, self.num_token_labels)[active_loss]
             active_labels = token_labels.view(-1)[active_loss]
             if active_logits.shape[0] > 0: # Ensure there are valid tokens to compute loss on
-                 token_loss = loss_fct(active_logits, active_labels)
+                 token_loss = bce_loss(active_logits, active_labels)
             else:
                  # Handle cases where the batch might only contain padding after filtering
                  # Or if no token labels are present for the active parts
@@ -231,7 +225,6 @@ from torch.nn import CrossEntropyLoss
 
 class MultitaskTrainerJoint(Trainer): # Renamed for clarity
     def compute_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
-        print("compute_loss")
         # Extract all labels. The collator ensures these keys exist.
         sequence_labels = inputs.pop("sequence_labels", None)
         token_labels = inputs.pop("token_labels", None)
@@ -247,6 +240,7 @@ class MultitaskTrainerJoint(Trainer): # Renamed for clarity
 
         total_loss = 0.0
         loss_fct = CrossEntropyLoss() # Use appropriate loss, potentially different ones per task
+        bce_loss = nn.BCEWithLogitsLoss()
 
         # --- Calculate Loss for Each Task ---
         # Sequence Task Loss (calculated if sequence_labels is provided and not -100)
@@ -258,7 +252,7 @@ class MultitaskTrainerJoint(Trainer): # Renamed for clarity
                 active_labels = sequence_labels.view(-1)[active_loss_diff]
                 # Ensure active_labels are within the valid range [0, num_labels_diff-1]
                 if torch.all(active_labels >= 0) and torch.all(active_labels < self.model.num_sequence_labels):
-                     total_loss += loss_fct(active_logits, active_labels) * 0.5 # Example weighting
+                    total_loss += loss_fct(active_logits, active_labels) # Example weighting
                 # else: print warning or handle invalid labels
             elif sequence_labels.numel() > 0 and torch.all(sequence_labels == -100):
                  total_loss += 0.0 * sequence_logits.sum() # Handle batches with only ignored labels
@@ -267,11 +261,11 @@ class MultitaskTrainerJoint(Trainer): # Renamed for clarity
         if token_labels is not None and token_logits is not None:
             active_loss_ss = token_labels.view(-1) != -100
             if active_loss_ss.sum() > 0:
-                active_logits = token_logits.view(-1, self.model.num_token_labels)[active_loss_ss]
+                active_logits = token_logits.view(-1)[active_loss_ss]
                 active_labels = token_labels.view(-1)[active_loss_ss]
                 # Ensure active_labels are within the valid range [0, num_labels_supersense-1]
                 if torch.all(active_labels >= 0) and torch.all(active_labels < self.model.num_token_labels):
-                    total_loss += loss_fct(active_logits, active_labels) * 0.5 # Example weighting
+                    total_loss += bce_loss(active_logits, active_labels) # Example weighting
                 # else: print warning or handle invalid labels
             elif token_labels.numel() > 0 and torch.all(token_labels == -100):
                  total_loss += 0.0 * token_logits.sum() # Handle batches with only ignored labels

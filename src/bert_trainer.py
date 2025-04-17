@@ -11,11 +11,7 @@ from bert_multitask import CustomMultiTaskModel, DataCollatorForJointMLMClassifi
 import json
 from transformers import (
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
-    DataCollatorWithPadding,
     TrainingArguments,
-    Trainer,
-    AutoConfig,
     set_seed
 )
 import wandb
@@ -75,12 +71,16 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
         s2 = item["USAGE_y"] if not mark_target else item['USAGE_y'].replace(w2, f"[TGT]{w2}[/TGT]")
         s1 = word_tokenize(s1)
         s2 = word_tokenize(s2)
+        supersenses1 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s1]
+        supersenses2 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s2]
+        supersenses1 = [[1 if i in sp1 else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp1 in supersenses1]
+        supersenses2 = [[1 if i in sp2 else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp2 in supersenses2]
         data = {
             'sentence1': s1,
             'sentence2': s2,
-            'supersenses1': [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s1],
-            'supersenses2': [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s2],
-            'label_diff': 1 if item['LABEL'] == 'identical' else 0
+            'supersenses1': supersenses1,
+            'supersenses2': supersenses2,
+            'label_diff': 1.0 if item['LABEL'] == 'identical' else 0.0
         }
         processed_data.append(data)
     
@@ -102,7 +102,7 @@ def preprocess_function(examples, tokenizer):
     passed = False
     for word_id in word_ids:
         if word_id is None:
-            new_supersenses.append([])
+            new_supersenses.append([-100 for _ in range(NUM_SUPERSENSE_CLASSES)])
         elif not passed and word_id + 1 == len(examples['supersenses1']):
             new_supersenses.append(supersenses[word_id])
             supersenses = examples['supersenses2']
@@ -138,7 +138,7 @@ def main():
                         help='Path to the dataset file')
     parser.add_argument('--mark_target', action='store_true', default=False,
                         help='Mark the target word in the sentences')
-    parser.add_argument('--supersense', action='store_true', default=False,
+    parser.add_argument('--supersense', action='store_true', default=True,
                         help='Use supersense classification')
     parser.add_argument('--output_dir', type=str, default='output/bert-classifier',
                         help='Directory to save the model')
