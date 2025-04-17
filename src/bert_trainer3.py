@@ -261,10 +261,6 @@ class CustomMultiTaskModel(nn.Module):
                           self.loss_weights["seq"] * seq_loss +
                           self.loss_weights["token"] * token_loss)
 
-        if not return_dict:
-            output = (mlm_logits, sequence_logits, token_logits) + outputs[1:] # Add hidden states and attentions if requested
-            return ((total_loss,) + output) if total_loss is not None else output
-
         return MultiTaskModelOutput(
             loss=total_loss,
             mlm_logits=mlm_logits,
