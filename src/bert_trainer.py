@@ -86,20 +86,6 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
     
     return Dataset.from_list(processed_data)
 
-def align_labels_with_tokens(labels, word_ids):
-    new_labels = []
-    current_word = None
-    for word_id in word_ids:
-        if word_id is None:
-            new_labels.append(-100)
-        elif word_id != current_word:
-            label = -100 if word_id is None else labels[word_id]
-            new_labels.append(label)
-            current_word = word_id
-        else:
-            new_labels.append(labels[word_id])
-    return new_labels
-
 def preprocess_function(examples, tokenizer):
     """Tokenize the input sentences."""
     tokenized_examples = tokenizer(
@@ -175,11 +161,11 @@ def main():
     if args.wandb_run_name is None:
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
     
-    # wandb.init(
-    #     project=args.wandb_project,
-    #     name=args.wandb_run_name,
-    #     config=vars(args)
-    # )
+    wandb.init(
+        project=args.wandb_project,
+        name=args.wandb_run_name,
+        config=vars(args)
+    )
     
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target, supersense=args.supersense)

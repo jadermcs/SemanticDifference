@@ -150,7 +150,7 @@ class CustomMultiTaskModel(nn.Module):
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
-        mlm_labels=None,        # Labels for MLM
+        labels=None,        # Labels for MLM
         sequence_labels=None, # Labels for sequence classification
         token_labels=None,    # Labels for token classification
         output_attentions=None,
@@ -189,11 +189,11 @@ class CustomMultiTaskModel(nn.Module):
 
         # --- Calculate Losses ---
         total_loss = None
-        if mlm_labels is not None and sequence_labels is not None and token_labels is not None:
+        if labels is not None and sequence_labels is not None and token_labels is not None:
             loss_fct = CrossEntropyLoss() # Common loss function
 
             # MLM Loss
-            mlm_loss = loss_fct(mlm_logits.view(-1, self.config.vocab_size), mlm_labels.view(-1))
+            mlm_loss = loss_fct(mlm_logits.view(-1, self.config.vocab_size), labels.view(-1))
 
             # Sequence Classification Loss
             seq_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), sequence_labels.view(-1))
@@ -237,9 +237,10 @@ class MultitaskTrainerJoint(Trainer): # Renamed for clarity
         # Extract all labels. The collator ensures these keys exist.
         labels_diff = inputs.pop("labels_diff", None)
         labels_supersense = inputs.pop("labels_supersense", None)
-        mlm_labels = inputs.pop("labels", None) # 'labels' is the standard key for MLM
+        mlm_labels = inputs.pop("labels", None)
 
         # Forward pass - Model gets potentially masked input_ids
+        print(inputs)
         outputs = model(**inputs, return_dict=True)
 
         # Extract logits (ensure keys match your MultitaskOutput and model forward pass)
