@@ -102,7 +102,7 @@ class DataCollatorForJointMLMClassification:
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-from transformers import AutoModel, AutoConfig
+from transformers import AutoConfig, AutoModelForMaskedLM
 from transformers.modeling_outputs import ModelOutput
 
 # Define a custom output class to hold outputs for all tasks
@@ -120,15 +120,13 @@ class CustomMultiTaskModel(nn.Module):
     def __init__(self, model_name_or_path, num_sequence_labels, num_token_labels, loss_weights=None):
         super().__init__()
         self.config = AutoConfig.from_pretrained(model_name_or_path)
-        self.bert = AutoModel.from_pretrained(model_name_or_path, config=self.config) # Or your specific base model
+        self.model = AutoModelForMaskedLM.from_pretrained(model_name_or_path, config=self.config) # Or your specific base model
 
         # MLM Head (often part of the base model architecture for BERT-like models, e.g., via BertLMPredictionHead)
         # If using AutoModel, you might need to add the MLM head manually or use BertForMaskedLM as the base and access its components.
         # For simplicity, let's assume we might need to re-implement or fetch it if not using BertForMaskedLM directly.
         # We'll assume self.bert has or we add an MLM prediction capability later if needed.
         # A dedicated MLM head might look like this if needed:
-        self.mlm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size)
-
 
         # Sequence Classification Head
         self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels)
@@ -159,7 +157,7 @@ class CustomMultiTaskModel(nn.Module):
     ):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
+        outputs = self.model(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -167,22 +165,21 @@ class CustomMultiTaskModel(nn.Module):
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
+            output_hidden_states=True,
             return_dict=return_dict,
         )
 
-        sequence_output = outputs[0] # Last hidden state (batch_size, sequence_length, hidden_size)
-        pooled_output = sequence_output[:, 0] # Output for [CLS] token (batch_size, hidden_size) - often used for sequence classification
-
+        sequence_output = outputs.hidden_states[-1] # Last hidden state (batch_size, sequence_length, hidden_size)
+        
         # --- Calculate Logits ---
         # MLM Logits (predicting masked tokens)
         # If using BertForMaskedLM, this would be handled differently.
         # If using AutoModel, apply the head. Note: this is a simplification.
         # A proper MLM head often involves transformations + LayerNorm + bias.
-        mlm_logits = self.mlm_head(sequence_output) # (batch_size, sequence_length, vocab_size)
+        mlm_logits = outputs.logits
 
         # Sequence Classification Logits
-        sequence_logits = self.sequence_classifier(pooled_output) # (batch_size, num_sequence_labels)
+        sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
 
         # Token Classification Logits
         token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
@@ -234,6 +231,7 @@ from torch.nn import CrossEntropyLoss
 
 class MultitaskTrainerJoint(Trainer): # Renamed for clarity
     def compute_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
+        print("compute_loss")
         # Extract all labels. The collator ensures these keys exist.
         sequence_labels = inputs.pop("sequence_labels", None)
         token_labels = inputs.pop("token_labels", None)

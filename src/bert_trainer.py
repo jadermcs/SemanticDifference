@@ -115,6 +115,7 @@ def preprocess_function(examples, tokenizer):
     return tokenized_examples
 
 def compute_metrics(pred):
+    print("compute_metrics")
     """Compute metrics for evaluation."""
     labels = pred.label_ids
     preds = pred.predictions.argmax(-1)
