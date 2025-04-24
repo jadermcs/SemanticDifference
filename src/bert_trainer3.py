@@ -199,7 +199,7 @@ class CustomMultiTaskModel(nn.Module):
         seq_length = input_ids.size(1)
 
         # 1. Get standard word embeddings
-        word_embeds = self.word_embeddings(input_ids)
+        # word_embeds = self.word_embeddings(input_ids)
 
         # 2. Get sense embeddings
         if sense_ids is not None:
@@ -211,19 +211,19 @@ class CustomMultiTaskModel(nn.Module):
 
         # --- Replicate the rest of BertEmbeddings forward pass ---
         # 4. Add position embeddings
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-        position_embeds = self.position_embeddings(position_ids)
+        # position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
+        # position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+        # position_embeds = self.position_embeddings(position_ids)
 
         # 5. Add token type embeddings
-        token_type_embeds = self.token_type_embeddings(token_type_ids)
+        # token_type_embeds = self.token_type_embeddings(token_type_ids)
 
         # 6. Sum all embeddings
-        final_embeddings = word_embeds + position_embeds + token_type_embeds
+        # final_embeddings = word_embeds + position_embeds + token_type_embeds
 
         # 7. Apply LayerNorm and Dropout
-        final_embeddings = self.LayerNorm(final_embeddings)
-        final_embeddings = self.dropout(final_embeddings)
+        # final_embeddings = self.LayerNorm(final_embeddings)
+        # final_embeddings = self.dropout(final_embeddings)
         # --- End Replication ---
 
         # 8. Pass final embeddings to BERT encoder
@@ -231,7 +231,8 @@ class CustomMultiTaskModel(nn.Module):
         # We also need to pass the `attention_mask`
         # `token_type_ids` are effectively handled by the embedding addition above
         outputs = self.model(
-            inputs_embeds=final_embeddings,
+            # inputs_embeds=final_embeddings,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels,
             token_type_ids=None, # Not needed here as types are in final_embeddings
