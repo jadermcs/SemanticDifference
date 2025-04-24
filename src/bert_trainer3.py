@@ -2,21 +2,27 @@
 # coding: utf-8
 import argparse
 import torch
+import torch.nn as nn
 from nltk.corpus import wordnet
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from functools import lru_cache
 import json
 from transformers import (
-    AutoModelForSequenceClassification,
+    AutoModelForMaskedLM,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
+    AutoConfig,
     set_seed
 )
-import wandb
+# import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
+from transformers.modeling_outputs import ModelOutput
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -28,6 +34,7 @@ WARMUP_STEPS = 500
 NUM_EPOCHS = 10
 START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
+PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -93,19 +100,18 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
 
 def preprocess_function(examples, tokenizer, supersense=False):
     """Tokenize the input sentences."""
-    labels = examples['labels']
-    if supersense:
-        s1 = examples['supersense1']
-        s2 = examples['supersense2']
-    examples = tokenizer(
+    tokens = tokenizer(
         examples['sentence1'],
         examples['sentence2'],
         truncation=True,
         max_length=MAX_LENGTH,
         padding='max_length',
+        return_token_type_ids=True,
         is_split_into_words=supersense
     )
     if supersense:
+        s1 = examples['supersense1']
+        s2 = examples['supersense2']
         new_supersenses = []
         word_ids = examples.word_ids()
         supersenses = s1
@@ -119,18 +125,16 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 passed = True
             else:
                 new_supersenses.append(supersenses[word_id])
-        examples['supersenses'] = new_supersenses
+        tokens['supersenses'] = new_supersenses
 
-    examples['labels'] = labels
-    return examples
+    tokens['labels'] = tokens['input_ids']
+    return tokens
 
 
 def compute_metrics(pred):
     """Compute metrics for evaluation."""
     labels = pred.label_ids
     preds = pred.predictions.argmax(-1)
-    print(labels.shape)
-    print(preds.shape)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
     acc = accuracy_score(labels, preds)
 
@@ -141,49 +145,41 @@ def compute_metrics(pred):
         'recall': recall
     }
 
-import torch.nn as nn
-from transformers import AutoConfig, AutoModelForMaskedLM
-from transformers.modeling_outputs import ModelOutput
-from dataclasses import dataclass
-from typing import Optional, Tuple
-
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
-    loss: Optional[torch.FloatTensor] = None
-    mlm_logits: torch.FloatTensor = None
-    sequence_logits: torch.FloatTensor = None
-    token_logits: torch.FloatTensor = None
+    loss: Optional[torch.FloatTensor|float] = None
+    mlm_logits: Optional[torch.FloatTensor] = None
+    sequence_logits: Optional[torch.FloatTensor] = None
+    token_logits: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 class CustomMultiTaskModel(nn.Module):
-    def __init__(self, model_name_or_path, num_sequence_labels, num_token_labels, loss_weights=None):
+    def __init__(self, model_name_or_path, num_sequence_labels, num_token_labels, pad_sense_id, loss_weights=None):
         super().__init__()
         self.config = AutoConfig.from_pretrained(model_name_or_path)
         self.model = AutoModelForMaskedLM.from_pretrained(model_name_or_path, config=self.config) # Or your specific base model
+        if num_token_labels > 0:
+            self.sense_embeddings = nn.Embedding(num_token_labels, self.config.hidden_size, padding_idx=pad_sense_id)
+            # Optional: Initialize sense embeddings (e.g., Xavier initialization)
+            nn.init.xavier_uniform_(self.sense_embeddings.weight)
 
-        # MLM Head (often part of the base model architecture for BERT-like models, e.g., via BertLMPredictionHead)
-        # If using AutoModel, you might need to add the MLM head manually or use BertForMaskedLM as the base and access its components.
-        # For simplicity, let's assume we might need to re-implement or fetch it if not using BertForMaskedLM directly.
-        # We'll assume self.bert has or we add an MLM prediction capability later if needed.
-        # A dedicated MLM head might look like this if needed:
+        # We need access to components of the standard embeddings layer
+        self.word_embeddings = self.model.roberta.embeddings.word_embeddings
+        self.position_embeddings = self.model.roberta.embeddings.position_embeddings
+        self.token_type_embeddings = self.model.roberta.embeddings.token_type_embeddings
+        self.LayerNorm = self.model.roberta.embeddings.LayerNorm
+        self.dropout = self.model.roberta.embeddings.dropout
 
-        # Sequence Classification Head
-        self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels)
-
-        # Token Classification Head
-        # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels)
-
-        self.num_sequence_labels = num_sequence_labels
-        self.num_token_labels = num_token_labels
-
-        # Loss weights (optional, for combining losses)
-        self.loss_weights = loss_weights if loss_weights else {"mlm": 1.0, "seq": 1.0, "token": 1.0}
+        # Example: Add a classification head
+        self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels) # Binary classification
+        self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
 
     def forward(
         self,
-        input_ids=None,
+        input_ids,
+        sense_ids=None,
         attention_mask=None,
         token_type_ids=None,
         position_ids=None,
@@ -196,76 +192,76 @@ class CustomMultiTaskModel(nn.Module):
         output_hidden_states=None,
         return_dict=None,
     ):
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        seq_length = input_ids.size(1)
 
+        # 1. Get standard word embeddings
+        word_embeds = self.word_embeddings(input_ids)
+
+        # 2. Get sense embeddings
+        if sense_ids is not None:
+            sense_embeds = self.sense_embeddings(sense_ids)
+            # 3. Sum word and sense embeddings
+            # Make sure sense embeddings for PAD tokens are zero (handled by padding_idx)
+            # or explicitly zero them out if needed based on attention mask/padding id.
+            word_embeds = word_embeds + sense_embeds
+
+        # --- Replicate the rest of BertEmbeddings forward pass ---
+        # 4. Add position embeddings
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+        position_embeds = self.position_embeddings(position_ids)
+
+        # 5. Add token type embeddings
+        token_type_embeds = self.token_type_embeddings(token_type_ids)
+
+        # 6. Sum all embeddings
+        final_embeddings = word_embeds + position_embeds + token_type_embeds
+
+        # 7. Apply LayerNorm and Dropout
+        final_embeddings = self.LayerNorm(final_embeddings)
+        final_embeddings = self.dropout(final_embeddings)
+        # --- End Replication ---
+
+        # 8. Pass final embeddings to BERT encoder
+        # We pass `inputs_embeds` instead of `input_ids`
+        # We also need to pass the `attention_mask`
+        # `token_type_ids` are effectively handled by the embedding addition above
         outputs = self.model(
-            input_ids,
+            inputs_embeds=final_embeddings,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
+            labels=labels,
+            token_type_ids=None, # Not needed here as types are in final_embeddings
             output_hidden_states=True,
-            return_dict=return_dict,
+            return_dict=True # Recommended
         )
 
-        sequence_output = outputs.hidden_states[-1] # Last hidden state (batch_size, sequence_length, hidden_size)
-        
-        # --- Calculate Logits ---
-        # MLM Logits (predicting masked tokens)
-        # If using BertForMaskedLM, this would be handled differently.
-        # If using AutoModel, apply the head. Note: this is a simplification.
-        # A proper MLM head often involves transformations + LayerNorm + bias.
-        # mlm_logits = outputs.logits
-
-        # Sequence Classification Logits
+        # Use the output (e.g., pooler output or [CLS] token)
+        # pooler_output = outputs.pooler_output # Output of the [CLS] token + linear layer + Tanh
+        sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
         sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
         # Token Classification Logits
-        # token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
+        token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
 
         # --- Calculate Losses ---
         total_loss = 0.0
-        mlm_loss = 0.0
-        seq_loss = 0.0
-        token_loss = 0.0
-        mlm_logits = None
-        token_logits = None
+        mlm_loss = None
+        sequence_loss = None
+        token_loss = None
+
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss() # Common loss function
-            seq_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
-            total_loss += seq_loss
-        if labels is not None and sequence_labels is not None and token_labels is not None:
-            print("rodou")
-            loss_fct = nn.CrossEntropyLoss() # Common loss function
-            bce_loss = nn.BCEWithLogitsLoss()
-
-            # MLM Loss
-            mlm_loss = loss_fct(mlm_logits.view(-1, self.config.vocab_size), labels.view(-1))
-
-            # Token Classification Loss (ignoring padding, typically -100)
-            # Only compute loss for non-special tokens if needed
-            active_loss = attention_mask.view(-1) == 1 # Or based on token_labels != -100
-            active_logits = token_logits.view(-1, self.num_token_labels)[active_loss]
-            active_labels = token_labels.view(-1)[active_loss]
-            if active_logits.shape[0] > 0: # Ensure there are valid tokens to compute loss on
-                 token_loss = bce_loss(active_logits, active_labels)
-            else:
-                 # Handle cases where the batch might only contain padding after filtering
-                 # Or if no token labels are present for the active parts
-                 token_loss = torch.tensor(0.0, device=sequence_logits.device) # Ensure loss is on the correct device
-
-
-            # Combine losses (e.g., weighted sum)
-            total_loss = (self.loss_weights["mlm"] * mlm_loss +
-                          self.loss_weights["seq"] * seq_loss +
-                          self.loss_weights["token"] * token_loss)
+            mlm_loss = outputs.loss
+            total_loss += mlm_loss
+        if token_labels is not None:
+            loss_fct = nn.BCEWithLogitsLoss()
+            token_loss = loss_fct(token_logits.view(-1), token_labels)
+            total_loss += token_loss
+        if sequence_labels is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            sequence_loss = loss_fct(sequence_logits.view(-1), sequence_labels.view(-1))
+            total_loss += sequence_loss
 
         return MultiTaskModelOutput(
             loss=total_loss,
-            mlm_logits=mlm_logits,
-            sequence_logits=sequence_logits,
-            token_logits=token_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
@@ -304,11 +300,11 @@ def main():
     if args.wandb_run_name is None:
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
 
-    wandb.init(
-        project=args.wandb_project,
-        name=args.wandb_run_name,
-        config=vars(args)
-    )
+    # wandb.init(
+    #     project=args.wandb_project,
+    #     name=args.wandb_run_name,
+    #     config=vars(args)
+    # )
 
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target, supersense=args.supersense)
@@ -328,35 +324,36 @@ def main():
     )
 
     # Initialize model
-    # model = CustomMultiTaskModel(
-    #     args.model,
-    #     num_sequence_labels=2,
-    #     num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0
-    # )
-    model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
+    model = CustomMultiTaskModel(
+        args.model,
+        num_sequence_labels=2,
+        num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0,
+        pad_sense_id=PAD_SENSE_ID
+    )
+    # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
         tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
         model.resize_token_embeddings(len(tokenizer))
 
     # Define training arguments
     training_args = TrainingArguments(
-        output_dir=args.output_dir,
+        # output_dir=args.output_dir,
         learning_rate=LEARNING_RATE,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=NUM_EPOCHS,
         weight_decay=0.01,
         eval_strategy="steps",
-        eval_steps=500,
+        eval_steps=2,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
-        report_to="wandb",
-        run_name=args.wandb_run_name
+        # report_to="wandb",
+        # run_name=args.wandb_run_name
     )
-    
+
     # Initialize trainer
     trainer = Trainer(
         model=model,
@@ -371,16 +368,16 @@ def main():
 
     # Evaluate the model
     metrics = trainer.evaluate()
-    
+
     # Log final metrics to wandb
-    wandb.log(metrics)
-    
+    # wandb.log(metrics)
+
     # Save the model
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
-    
+
     # Finish wandb run
-    wandb.finish()
+    # wandb.finish()
 
 if __name__ == "__main__":
     main()
