@@ -158,6 +158,10 @@ class MultiTaskModelOutput(ModelOutput):
 class CustomMultiTaskModel(nn.Module):
     def __init__(self, model_name_or_path, num_sequence_labels, num_token_labels, pad_sense_id, loss_weights=None):
         super().__init__()
+        self.num_sequence_labels = num_sequence_labels
+        self.num_token_labels = num_token_labels
+        self.pad_sense_id = pad_sense_id
+        self.loss_weights = loss_weights
         self.config = AutoConfig.from_pretrained(model_name_or_path)
         self.model = AutoModelForMaskedLM.from_pretrained(model_name_or_path, config=self.config) # Or your specific base model
         if num_token_labels > 0:
@@ -235,13 +239,6 @@ class CustomMultiTaskModel(nn.Module):
             return_dict=True # Recommended
         )
 
-        # Use the output (e.g., pooler output or [CLS] token)
-        # pooler_output = outputs.pooler_output # Output of the [CLS] token + linear layer + Tanh
-        sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
-        sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
-        # Token Classification Logits
-        token_logits = self.token_classifier(sequence_output) # (batch_size, sequence_length, num_token_labels)
-
         # --- Calculate Losses ---
         total_loss = 0.0
         mlm_loss = None
@@ -253,11 +250,14 @@ class CustomMultiTaskModel(nn.Module):
             total_loss += mlm_loss
         if token_labels is not None:
             loss_fct = nn.BCEWithLogitsLoss()
-            token_loss = loss_fct(token_logits.view(-1), token_labels)
+            token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
+            token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
             total_loss += token_loss
         if sequence_labels is not None:
+            sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
+            sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
             loss_fct = nn.CrossEntropyLoss()
-            sequence_loss = loss_fct(sequence_logits.view(-1), sequence_labels.view(-1))
+            sequence_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), sequence_labels.view(-1))
             total_loss += sequence_loss
 
         return MultiTaskModelOutput(
@@ -269,7 +269,7 @@ class CustomMultiTaskModel(nn.Module):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train a BERT model for WiC classification')
+    parser = argparse.ArgumentParser(description='Train a MLM model for difference classification')
     parser.add_argument('--model', type=str, default='FacebookAI/roberta-base',
                         help='Pre-trained model to use')
     parser.add_argument('--dataset', type=str, default='wic',
