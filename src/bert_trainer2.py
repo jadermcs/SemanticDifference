@@ -93,11 +93,7 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
 
 def preprocess_function(examples, tokenizer, supersense=False):
     """Tokenize the input sentences."""
-    labels = examples['labels']
-    if supersense:
-        s1 = examples['supersense1']
-        s2 = examples['supersense2']
-    examples = tokenizer(
+    tokens = tokenizer(
         examples['sentence1'],
         examples['sentence2'],
         truncation=True,
@@ -106,6 +102,8 @@ def preprocess_function(examples, tokenizer, supersense=False):
         is_split_into_words=supersense
     )
     if supersense:
+        s1 = examples['supersense1']
+        s2 = examples['supersense2']
         new_supersenses = []
         word_ids = examples.word_ids()
         supersenses = s1
@@ -119,10 +117,10 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 passed = True
             else:
                 new_supersenses.append(supersenses[word_id])
-        examples['supersenses'] = new_supersenses
+        tokens['supersenses'] = new_supersenses
 
-    examples['labels'] = labels
-    return examples
+    tokens['labels'] = tokens['input_ids']
+    return tokens
 
 
 def compute_metrics(pred):
@@ -141,7 +139,7 @@ def compute_metrics(pred):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train a BERT model for WiC classification')
+    parser = argparse.ArgumentParser(description='Train a MLM model for difference classification')
     parser.add_argument('--model', type=str, default='FacebookAI/roberta-base',
                         help='Pre-trained model to use')
     parser.add_argument('--dataset', type=str, default='wic',
@@ -222,7 +220,7 @@ def main():
         report_to="wandb",
         run_name=args.wandb_run_name
     )
-    
+
     # Initialize trainer
     trainer = Trainer(
         model=model,
@@ -237,16 +235,17 @@ def main():
 
     # Evaluate the model
     metrics = trainer.evaluate()
-    
+
     # Log final metrics to wandb
     wandb.log(metrics)
-    
+
     # Save the model
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
-    
+
     # Finish wandb run
     wandb.finish()
+
 
 if __name__ == "__main__":
     main()

@@ -170,15 +170,15 @@ class CustomMultiTaskModel(nn.Module):
             nn.init.xavier_uniform_(self.sense_embeddings.weight)
 
         # We need access to components of the standard embeddings layer
-        self.word_embeddings = self.model.roberta.embeddings.word_embeddings
-        self.position_embeddings = self.model.roberta.embeddings.position_embeddings
-        self.token_type_embeddings = self.model.roberta.embeddings.token_type_embeddings
-        self.LayerNorm = self.model.roberta.embeddings.LayerNorm
-        self.dropout = self.model.roberta.embeddings.dropout
+        # self.word_embeddings = self.model.roberta.embeddings.word_embeddings
+        # self.position_embeddings = self.model.roberta.embeddings.position_embeddings
+        # self.token_type_embeddings = self.model.roberta.embeddings.token_type_embeddings
+        # self.LayerNorm = self.model.roberta.embeddings.LayerNorm
+        # self.dropout = self.model.roberta.embeddings.dropout
 
         # Example: Add a classification head
         self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels) # Binary classification
-        self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
+        # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
 
     def forward(
         self,
@@ -189,8 +189,8 @@ class CustomMultiTaskModel(nn.Module):
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
-        labels=None,        # Labels for MLM
-        sequence_labels=None, # Labels for sequence classification
+        labels=None,        # Labels for sequence classification
+        mlm_labels=None, # Labels for MLM
         token_labels=None,    # Labels for token classification
         output_attentions=None,
         output_hidden_states=None,
@@ -234,35 +234,39 @@ class CustomMultiTaskModel(nn.Module):
             # inputs_embeds=final_embeddings,
             input_ids=input_ids,
             attention_mask=attention_mask,
-            labels=labels,
+            labels=mlm_labels,
             token_type_ids=None, # Not needed here as types are in final_embeddings
             output_hidden_states=True,
             return_dict=True # Recommended
         )
 
         # --- Calculate Losses ---
-        total_loss = 0.0
+        loss = 0.0
         mlm_loss = None
         sequence_loss = None
         token_loss = None
 
-        if labels is not None:
+        if mlm_labels is not None:
             mlm_loss = outputs.loss
-            total_loss += mlm_loss
+            loss += mlm_loss
         if token_labels is not None:
             loss_fct = nn.BCEWithLogitsLoss()
             token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
-            total_loss += token_loss
-        if sequence_labels is not None:
+            loss += token_loss
+        if labels is not None:
             sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
             sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
             loss_fct = nn.CrossEntropyLoss()
             sequence_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), sequence_labels.view(-1))
-            total_loss += sequence_loss
+            loss += sequence_loss
+
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
 
         return MultiTaskModelOutput(
-            loss=total_loss,
+            loss=loss,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
@@ -345,7 +349,7 @@ def main():
         num_train_epochs=NUM_EPOCHS,
         weight_decay=0.01,
         eval_strategy="steps",
-        eval_steps=2,
+        eval_steps=500,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
@@ -379,6 +383,7 @@ def main():
 
     # Finish wandb run
     # wandb.finish()
+
 
 if __name__ == "__main__":
     main()
