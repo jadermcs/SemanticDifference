@@ -204,7 +204,7 @@ class CustomMultiTaskModel(nn.Module):
         # 2. Get sense embeddings
         if sense_ids is not None:
             sense_embeds = self.sense_embeddings(sense_ids)
-            # 3. Sum word and sense embeddings
+            # 3. Sum word and sense embedings
             # Make sure sense embeddings for PAD tokens are zero (handled by padding_idx)
             # or explicitly zero them out if needed based on attention mask/padding id.
             word_embeds = word_embeds + sense_embeds
@@ -258,11 +258,11 @@ class CustomMultiTaskModel(nn.Module):
             sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
             sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
             loss_fct = nn.CrossEntropyLoss()
-            sequence_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), sequence_labels.view(-1))
+            sequence_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
             loss += sequence_loss
 
         if not return_dict:
-            output = (logits,) + outputs[2:]
+            output = (sequence_logits,) + outputs[2:]
             return ((loss,) + output) if loss is not None else output
 
         return MultiTaskModelOutput(
