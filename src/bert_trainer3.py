@@ -127,7 +127,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 new_supersenses.append(supersenses[word_id])
         tokens['supersenses'] = new_supersenses
 
-    tokens['labels'] = tokens['input_ids']
+    tokens['labels'] = examples['labels']
     return tokens
 
 
@@ -156,9 +156,9 @@ class MultiTaskModelOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 class CustomMultiTaskModel(nn.Module):
-    def __init__(self, model_name_or_path, num_sequence_labels, num_token_labels, pad_sense_id, loss_weights=None):
+    def __init__(self, model_name_or_path, num_labels, num_token_labels, pad_sense_id, loss_weights=None):
         super().__init__()
-        self.num_sequence_labels = num_sequence_labels
+        self.num_labels = num_labels
         self.num_token_labels = num_token_labels
         self.pad_sense_id = pad_sense_id
         self.loss_weights = loss_weights
@@ -177,7 +177,7 @@ class CustomMultiTaskModel(nn.Module):
         # self.dropout = self.model.roberta.embeddings.dropout
 
         # Example: Add a classification head
-        self.sequence_classifier = nn.Linear(self.config.hidden_size, num_sequence_labels) # Binary classification
+        self.sequence_classifier = nn.Linear(self.config.hidden_size, num_labels) # Binary classification
         # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
 
     def forward(
@@ -240,6 +240,9 @@ class CustomMultiTaskModel(nn.Module):
             return_dict=True # Recommended
         )
 
+        sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
+        sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
+
         # --- Calculate Losses ---
         loss = 0.0
         mlm_loss = None
@@ -255,10 +258,8 @@ class CustomMultiTaskModel(nn.Module):
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
             loss += token_loss
         if labels is not None:
-            sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
-            sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
             loss_fct = nn.CrossEntropyLoss()
-            sequence_loss = loss_fct(sequence_logits.view(-1, self.num_sequence_labels), labels.view(-1))
+            sequence_loss = loss_fct(sequence_logits.view(-1, self.num_labels), labels.view(-1))
             loss += sequence_loss
 
         if not return_dict:
@@ -331,7 +332,7 @@ def main():
     # Initialize model
     model = CustomMultiTaskModel(
         args.model,
-        num_sequence_labels=2,
+        num_labels=2,
         num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0,
         pad_sense_id=PAD_SENSE_ID
     )
