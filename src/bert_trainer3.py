@@ -137,6 +137,7 @@ def compute_metrics(pred):
     preds = pred.predictions.argmax(-1)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
     acc = accuracy_score(labels, preds)
+    print(f1)
 
     return {
         'accuracy': acc,
