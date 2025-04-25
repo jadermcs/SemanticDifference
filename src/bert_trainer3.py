@@ -131,22 +131,6 @@ def preprocess_function(examples, tokenizer, supersense=False):
     return tokens
 
 
-def compute_metrics(pred):
-    """Compute metrics for evaluation."""
-    print("rodou")
-    labels = pred.label_ids
-    preds = pred.predictions.argmax(-1)
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
-    acc = accuracy_score(labels, preds)
-
-    return {
-        'accuracy': acc,
-        'f1': f1,
-        'precision': precision,
-        'recall': recall
-    }
-
-
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
     loss: Optional[torch.FloatTensor|float] = None
@@ -273,6 +257,22 @@ class CustomMultiTaskModel(nn.Module):
             attentions=outputs.attentions,
         )
 
+
+
+def compute_metrics(pred):
+    """Compute metrics for evaluation."""
+    print("rodou")
+    labels = pred.label_ids
+    preds = pred.predictions.argmax(-1)
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
+    acc = accuracy_score(labels, preds)
+
+    return {
+        'accuracy': acc,
+        'f1': f1,
+        'precision': precision,
+        'recall': recall
+    }
 
 
 def main():
