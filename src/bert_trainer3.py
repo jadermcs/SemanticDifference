@@ -14,6 +14,7 @@ from transformers import (
     TrainingArguments,
     Trainer,
     AutoConfig,
+    PreTrainedModel,
     set_seed
 )
 # import wandb
@@ -140,16 +141,13 @@ class MultiTaskModelOutput(ModelOutput):
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
-class CustomMultiTaskModel(nn.Module):
-    def __init__(self, model_name_or_path, num_labels, num_token_labels, pad_sense_id, loss_weights=None):
-        super().__init__()
-        self.num_labels = num_labels
-        self.num_token_labels = num_token_labels
-        self.pad_sense_id = pad_sense_id
-        self.loss_weights = loss_weights
-        self.config = AutoConfig.from_pretrained(model_name_or_path)
-        self.model = AutoModelForMaskedLM.from_pretrained(model_name_or_path, config=self.config) # Or your specific base model
-        if num_token_labels > 0:
+class CustomMultiTaskModel(PreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = config.num_labels
+        self.model = AutoModelForMaskedLM.from_pretrained(config._name_or_path, config=config) # Or your specific base model
+        if -1 > 0:
             self.sense_embeddings = nn.Embedding(num_token_labels, self.config.hidden_size, padding_idx=pad_sense_id)
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings.weight)
@@ -162,7 +160,7 @@ class CustomMultiTaskModel(nn.Module):
         # self.dropout = self.model.roberta.embeddings.dropout
 
         # Example: Add a classification head
-        self.sequence_classifier = nn.Linear(self.config.hidden_size, num_labels) # Binary classification
+        self.sequence_classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) # Binary classification
         # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
 
     def forward(
@@ -331,12 +329,10 @@ def main():
     )
 
     # Initialize model
-    model = CustomMultiTaskModel(
-        args.model,
-        num_labels=2,
-        num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0,
-        pad_sense_id=PAD_SENSE_ID
-    )
+    config = AutoConfig.from_pretrained(args.model, num_labels=2)
+    num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0
+    pad_sense_id=PAD_SENSE_ID
+    model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
         tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
