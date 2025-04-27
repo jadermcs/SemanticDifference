@@ -119,7 +119,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 new_supersenses.append(supersenses[word_id])
         tokens['supersenses'] = new_supersenses
 
-    tokens['labels'] = tokens['input_ids']
+    tokens['labels'] = examples['labels']
     return tokens
 
 

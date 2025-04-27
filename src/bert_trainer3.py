@@ -17,7 +17,7 @@ from transformers import (
     PreTrainedModel,
     set_seed
 )
-# import wandb
+import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
 from transformers.modeling_outputs import ModelOutput
@@ -134,12 +134,13 @@ def preprocess_function(examples, tokenizer, supersense=False):
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
-    loss: Optional[torch.FloatTensor|float] = None
+    loss: Optional[torch.FloatTensor | float] = None
     mlm_logits: Optional[torch.FloatTensor] = None
     sequence_logits: Optional[torch.FloatTensor] = None
     token_logits: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
+
 
 class CustomMultiTaskModel(PreTrainedModel):
     def __init__(self, config):
@@ -256,10 +257,8 @@ class CustomMultiTaskModel(PreTrainedModel):
         )
 
 
-
 def compute_metrics(pred):
     """Compute metrics for evaluation."""
-    print("rodou")
     labels = pred.label_ids
     preds = pred.predictions.argmax(-1)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
@@ -305,11 +304,11 @@ def main():
     if args.wandb_run_name is None:
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
 
-    # wandb.init(
-    #     project=args.wandb_project,
-    #     name=args.wandb_run_name,
-    #     config=vars(args)
-    # )
+    wandb.init(
+        project=args.wandb_project,
+        name=args.wandb_run_name,
+        config=vars(args)
+    )
 
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target, supersense=args.supersense)
@@ -340,7 +339,7 @@ def main():
 
     # Define training arguments
     training_args = TrainingArguments(
-        # output_dir=args.output_dir,
+        output_dir=args.output_dir,
         learning_rate=LEARNING_RATE,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
@@ -353,8 +352,8 @@ def main():
         greater_is_better=True,
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
-        # report_to="wandb",
-        # run_name=args.wandb_run_name
+        report_to="wandb",
+        run_name=args.wandb_run_name
     )
 
     # Initialize trainer
@@ -373,14 +372,14 @@ def main():
     metrics = trainer.evaluate()
 
     # Log final metrics to wandb
-    # wandb.log(metrics)
+    wandb.log(metrics)
 
     # Save the model
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
     # Finish wandb run
-    # wandb.finish()
+    wandb.finish()
 
 
 if __name__ == "__main__":
