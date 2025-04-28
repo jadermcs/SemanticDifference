@@ -15,6 +15,7 @@ from transformers import (
     Trainer,
     AutoConfig,
     PreTrainedModel,
+    RobertaPreTrainedModel,
     set_seed
 )
 import wandb
@@ -142,7 +143,7 @@ class MultiTaskModelOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class CustomMultiTaskModel(PreTrainedModel):
+class CustomMultiTaskModel(RobertaPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
@@ -163,6 +164,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         # Example: Add a classification head
         self.sequence_classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) # Binary classification
         # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
+        self.post_init()
 
     def forward(
         self,
