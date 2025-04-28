@@ -15,7 +15,6 @@ from transformers import (
     Trainer,
     AutoConfig,
     PreTrainedModel,
-    RobertaPreTrainedModel,
     set_seed
 )
 import wandb
@@ -143,7 +142,7 @@ class MultiTaskModelOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class CustomMultiTaskModel(RobertaPreTrainedModel):
+class CustomMultiTaskModel(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
@@ -328,6 +327,7 @@ def main():
         preprocess_function,
         fn_kwargs={"tokenizer": tokenizer}
     )
+    print(datasets["train"])
 
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
@@ -352,6 +352,7 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
+        label_names=["labels"],
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
         report_to="wandb",
