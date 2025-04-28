@@ -148,21 +148,21 @@ class CustomMultiTaskModel(PreTrainedModel):
         self.config = config
         self.num_labels = config.num_labels
         self.model = AutoModelForMaskedLM.from_pretrained(config._name_or_path, config=config) # Or your specific base model
-        if -1 > 0:
-            self.sense_embeddings = nn.Embedding(num_token_labels, self.config.hidden_size, padding_idx=pad_sense_id)
+        if config.num_token_labels > 0:
+            self.sense_embeddings = nn.Embedding(config.num_token_labels, config.hidden_size, padding_idx=config.pad_sense_id)
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings.weight)
 
         # We need access to components of the standard embeddings layer
-        # self.word_embeddings = self.model.roberta.embeddings.word_embeddings
-        # self.position_embeddings = self.model.roberta.embeddings.position_embeddings
-        # self.token_type_embeddings = self.model.roberta.embeddings.token_type_embeddings
-        # self.LayerNorm = self.model.roberta.embeddings.LayerNorm
-        # self.dropout = self.model.roberta.embeddings.dropout
+        self.word_embeddings = self.model.roberta.embeddings.word_embeddings
+        self.position_embeddings = self.model.roberta.embeddings.position_embeddings
+        self.token_type_embeddings = self.model.roberta.embeddings.token_type_embeddings
+        self.LayerNorm = self.model.roberta.embeddings.LayerNorm
+        self.dropout = self.model.roberta.embeddings.dropout
 
         # Example: Add a classification head
-        self.sequence_classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) # Binary classification
-        # self.token_classifier = nn.Linear(self.config.hidden_size, num_token_labels) # Token classification
+        self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels) # Binary classification
+        self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels) # Token classification
         self.post_init()
 
     def forward(
@@ -327,12 +327,11 @@ def main():
         preprocess_function,
         fn_kwargs={"tokenizer": tokenizer}
     )
-    print(datasets["train"])
 
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
-    num_token_labels=NUM_SUPERSENSE_CLASSES if args.supersense else 0
-    pad_sense_id=PAD_SENSE_ID
+    config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
+    config.pad_sense_id = PAD_SENSE_ID
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
