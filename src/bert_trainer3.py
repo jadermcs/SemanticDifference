@@ -327,7 +327,7 @@ def main():
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.pad_sense_id = PAD_SENSE_ID
-    model = CustomMultiTaskModel(config).to_bettertransformer()
+    model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
         tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
