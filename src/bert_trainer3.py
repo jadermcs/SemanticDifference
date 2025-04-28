@@ -227,15 +227,16 @@ class CustomMultiTaskModel(PreTrainedModel):
         sequence_loss = None
         token_loss = None
 
-        if mlm_labels is not None:
-            mlm_loss = outputs.loss
-            loss += mlm_loss
+        # if mlm_labels is not None:
+        #     mlm_loss = outputs.loss
+        #     loss += mlm_loss
         if token_labels is not None:
             loss_fct = nn.BCEWithLogitsLoss()
             token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
             loss += token_loss
         if labels is not None:
+            print("rodou labels")
             loss_fct = nn.CrossEntropyLoss()
             sequence_loss = loss_fct(sequence_logits.view(-1, self.num_labels), labels.view(-1))
             loss += sequence_loss
