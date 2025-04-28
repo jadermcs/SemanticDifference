@@ -126,7 +126,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 passed = True
             else:
                 new_supersenses.append(supersenses[word_id])
-        tokens['supersenses'] = new_supersenses
+        tokens['token_labels'] = new_supersenses
 
     tokens['labels'] = examples['labels']
     return tokens
