@@ -91,8 +91,8 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
         if supersense:
             supersenses1 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s1]
             supersenses2 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s2]
-            supersenses1 = [[1 if i in sp1 else 0 for i in range(NUM_SUPERSENSE_CLASSES)] for sp1 in supersenses1]
-            supersenses2 = [[1 if i in sp2 else 0 for i in range(NUM_SUPERSENSE_CLASSES)] for sp2 in supersenses2]
+            supersenses1 = [[1 if i in sp1 else 0 if len(sp1) else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp1 in supersenses1]
+            supersenses2 = [[1 if i in sp2 else 0 if len(sp2) else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp2 in supersenses2]
             data['supersenses1'] = supersenses1
             data['supersenses2'] = supersenses2
         processed_data.append(data)
