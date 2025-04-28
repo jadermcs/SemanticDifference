@@ -227,11 +227,13 @@ class CustomMultiTaskModel(PreTrainedModel):
         loss = 0.0
         mlm_loss = None
         sequence_loss = None
+        token_logits = None
+        mlm_logits = None
         token_loss = None
 
-        # if mlm_labels is not None:
-        #     mlm_loss = outputs.loss
-        #     loss += mlm_loss
+        if mlm_labels is not None:
+            mlm_loss = outputs.loss
+            loss += mlm_loss
         if token_labels is not None:
             loss_fct = nn.BCEWithLogitsLoss()
             token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
@@ -248,6 +250,9 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         return MultiTaskModelOutput(
             loss=loss,
+            token_logits=token_logits,
+            mlm_logits=mlm_logits,
+            sequence_logits=sequence_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
