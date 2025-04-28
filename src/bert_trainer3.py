@@ -190,7 +190,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         # --- Replicate the rest of BertEmbeddings forward pass ---
         # 4. Add position embeddings
         position_ids = torch.arange(
-            self.config.padding_token_id + 1, seq_length + self.config.padding_token_id + 1, dtype=torch.long, device=input_ids.device
+            self.config.pad_token_id + 1, seq_length + self.config.pad_token_id + 1, dtype=torch.long, device=input_ids.device
             )
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
         position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
@@ -327,7 +327,7 @@ def main():
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.pad_sense_id = PAD_SENSE_ID
-    model = CustomMultiTaskModel(config)
+    model = CustomMultiTaskModel(config).to_bettertransformer()
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
         tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
@@ -343,7 +343,7 @@ def main():
         weight_decay=0.01,
         eval_strategy="steps",
         eval_steps=500,
-        #load_best_model_at_end=True,
+        load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
         label_names=["labels"],
