@@ -189,7 +189,9 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         # --- Replicate the rest of BertEmbeddings forward pass ---
         # 4. Add position embeddings
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
+        position_ids = torch.arange(
+            self.config.padding_token_id + 1, seq_length + self.config.padding_token_id + 1, dtype=torch.long, device=input_ids.device
+            )
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
         position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
 
