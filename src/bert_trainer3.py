@@ -80,18 +80,19 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
         w2 = item['WORD_y']
         s1 = item["USAGE_x"] if not mark_target else item['USAGE_x'].replace(w1, f"{START_TARGET_TOKEN}{w1}{END_TARGET_TOKEN}")
         s2 = item["USAGE_y"] if not mark_target else item['USAGE_y'].replace(w2, f"{START_TARGET_TOKEN}{w2}{END_TARGET_TOKEN}")
+        if supersense:
+            s1 = word_tokenize(s1)
+            s2 = word_tokenize(s2)
         data = {
             'sentence1': s1,
             'sentence2': s2,
             'labels': 1 if item['LABEL'] == 'identical' else 0
         }
         if supersense:
-            s1 = word_tokenize(s1)
-            s2 = word_tokenize(s2)
             supersenses1 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s1]
             supersenses2 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s2]
-            supersenses1 = [[1 if i in sp1 else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp1 in supersenses1]
-            supersenses2 = [[1 if i in sp2 else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp2 in supersenses2]
+            supersenses1 = [[1 if i in sp1 else 0 for i in range(NUM_SUPERSENSE_CLASSES)] for sp1 in supersenses1]
+            supersenses2 = [[1 if i in sp2 else 0 for i in range(NUM_SUPERSENSE_CLASSES)] for sp2 in supersenses2]
             data['supersenses1'] = supersenses1
             data['supersenses2'] = supersenses2
         processed_data.append(data)
@@ -111,10 +112,10 @@ def preprocess_function(examples, tokenizer, supersense=False):
         is_split_into_words=supersense
     )
     if supersense:
-        s1 = examples['supersense1']
-        s2 = examples['supersense2']
+        s1 = examples['supersenses1']
+        s2 = examples['supersenses2']
         new_supersenses = []
-        word_ids = examples.word_ids()
+        word_ids = tokens.word_ids()
         supersenses = s1
         passed = False
         for word_id in word_ids:
@@ -235,6 +236,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             mlm_loss = outputs.loss
             loss += mlm_loss
         if token_labels is not None:
+            print("rodou fela")
             loss_fct = nn.BCEWithLogitsLoss()
             token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
@@ -325,7 +327,7 @@ def main():
 
     datasets = datasets.map(
         preprocess_function,
-        fn_kwargs={"tokenizer": tokenizer}
+        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense}
     )
 
     # Initialize model
