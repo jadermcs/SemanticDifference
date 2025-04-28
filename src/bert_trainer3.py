@@ -236,7 +236,6 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
             loss += token_loss
         if labels is not None:
-            print("rodou labels")
             loss_fct = nn.CrossEntropyLoss()
             sequence_loss = loss_fct(sequence_logits.view(-1, self.num_labels), labels.view(-1))
             loss += sequence_loss
