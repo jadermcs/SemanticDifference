@@ -156,7 +156,8 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 new_supersenses.append(supersenses[word_id])
         tokens['token_labels'] = new_supersenses
 
-    tokens['input_ids'], tokens['mlm_labels'] = mask_tokens(tokens['input_ids'][0], tokenizer)
+    # tokens['input_ids'], tokens['mlm_labels'] = mask_tokens(tokens['input_ids'][0], tokenizer)
+    tokens['input_ids'], _ = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['labels'] = examples['labels']
     return tokens
 
