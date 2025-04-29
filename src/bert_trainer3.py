@@ -279,26 +279,17 @@ def compute_metrics(pred):
 
 def main():
     parser = argparse.ArgumentParser(description='Train a MLM model for difference classification')
-    parser.add_argument('--model', type=str, default='FacebookAI/roberta-base',
-                        help='Pre-trained model to use')
-    parser.add_argument('--dataset', type=str, default='wic',
-                        help='Path to the dataset file')
-    parser.add_argument('--mark_target', action='store_true', default=False,
-                        help='Mark the target word in the sentences')
-    parser.add_argument('--supersense', action='store_true', default=False,
-                        help='Use supersense classification')
-    parser.add_argument('--output_dir', type=str, default='output/bert-classifier',
-                        help='Directory to save the model')
-    parser.add_argument('--wandb_project', type=str, default='semantic-difference',
-                        help='Weights & Biases project name')
-    parser.add_argument('--wandb_run_name', type=str, default=None,
-                        help='Weights & Biases run name')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Batch size for training')
-    parser.add_argument('--fp16', action='store_true', default=True,
-                        help='Use FP16 precision')
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for reproducibility')
+    parser.add_argument('--model', type=str, default='FacebookAI/roberta-base', help='Pre-trained model to use')
+    parser.add_argument('--dataset', type=str, default='wic', help='Path to the dataset file')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
+    parser.add_argument('--mark_target', action='store_true', default=False, help='Mark the target word in the sentences')
+    parser.add_argument('--supersense', action='store_true', default=False, help='Use supersense classification')
+    parser.add_argument('--output_dir', type=str, default='output/bert-classifier', help='Directory to save the model')
+    parser.add_argument('--wandb_project', type=str, default='semantic-difference', help='Weights & Biases project name')
+    parser.add_argument('--wandb_run_name', type=str, default=None, help='Weights & Biases run name')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
+    parser.add_argument('--fp16', action='store_true', default=True, help='Use FP16 precision')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
 
     args = parser.parse_args()
 

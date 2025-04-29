@@ -68,3 +68,6 @@ model = AutoModelForSequenceClassification.from_pretrained("output/bert-classifi
 tokenizer = AutoTokenizer.from_pretrained("output/bert-classifier")
 ```
 
+TODO:
+- Semcor and Masc allows exact match for supersenses. Use this in training to improve accuracy.
+- Mask input using roberta method, random tokens, mask tokens with probability 0.15.
