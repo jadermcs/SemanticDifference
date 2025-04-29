@@ -107,9 +107,7 @@ def mask_tokens(inputs, tokenizer, mlm_probability=.15):
     # We sample a few tokens in each sequence for MLM training (with probability self.mlm_probability)
     labels = inputs.clone()
     probability_matrix = torch.full(labels.shape, mlm_probability)
-    special_tokens_mask = [
-        tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
-    ]
+    special_tokens_mask = tokenizer.get_special_tokens_mask(labels, already_has_special_tokens=True)
     special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
 
     probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
@@ -158,7 +156,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
                 new_supersenses.append(supersenses[word_id])
         tokens['token_labels'] = new_supersenses
 
-    tokens['input_ids'], tokens['mlm_labels'] = mask_tokens(tokens['input_ids'], tokenizer)
+    tokens['input_ids'], tokens['mlm_labels'] = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['labels'] = examples['labels']
     return tokens
 
@@ -183,7 +181,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             self.sense_embeddings = nn.Embedding(config.num_token_labels, config.hidden_size, padding_idx=config.pad_sense_id)
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings.weight)
-
+#
         # Example: Add a classification head
         self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels) # Binary classification
         self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels) # Token classification
@@ -227,7 +225,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
 
         # 5. Add token type embeddings
-        token_type_embeds = self.model.roberta.embeddings.token_type_embeddings(token_type_ids)
+        token_type_embeds = self.model.roberta.embeddings.token_type_embeddings(token_type_ids.squeeze(1))
 
         # 6. Sum all embeddings
         final_embeddings = word_embeds + position_embeds + token_type_embeds
