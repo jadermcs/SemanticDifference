@@ -288,7 +288,8 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
             mask = (input_ids == self.config.mask_token_id).unsqueeze(-1).expand(-1, -1, token_logits.size(-1))
             valid = token_labels != -100
-            token_labels = token_labels.float() * mask.float() * valid.float()
+            mask = mask & valid
+            token_labels = token_labels.float() * mask.float()
             token_logits = token_logits * mask.float()
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
             loss += token_loss
