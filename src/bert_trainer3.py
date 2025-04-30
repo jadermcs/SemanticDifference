@@ -226,7 +226,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         seq_length = input_ids.size(1)
 
         # 1. Get standard word embeddings
-        word_embeds = self.model.roberta.embeddings.word_embeddings(input_ids)
+        word_embeds = self.model.model.embeddings.word_embeddings(input_ids)
 
         # 2. Get sense embeddings
         if sense_ids is not None:
@@ -242,17 +242,17 @@ class CustomMultiTaskModel(PreTrainedModel):
             self.config.pad_token_id + 1, seq_length + self.config.pad_token_id + 1, dtype=torch.long, device=input_ids.device
             )
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-        position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
+        position_embeds = self.model.model.embeddings.position_embeddings(position_ids)
 
         # 5. Add token type embeddings
-        token_type_embeds = self.model.roberta.embeddings.token_type_embeddings(token_type_ids.squeeze(1))
+        token_type_embeds = self.model.model.embeddings.token_type_embeddings(token_type_ids.squeeze(1))
 
         # 6. Sum all embeddings
         final_embeddings = word_embeds + position_embeds + token_type_embeds
 
         # 7. Apply LayerNorm and Dropout
-        final_embeddings = self.model.roberta.embeddings.LayerNorm(final_embeddings)
-        final_embeddings = self.model.roberta.embeddings.dropout(final_embeddings)
+        final_embeddings = self.model.model.embeddings.LayerNorm(final_embeddings)
+        final_embeddings = self.model.model.embeddings.dropout(final_embeddings)
         # --- End Replication ---
 
         # 8. Pass final embeddings to BERT encoder
