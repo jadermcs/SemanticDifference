@@ -139,14 +139,8 @@ def mask_tokens(inputs, tokenizer, mlm_probability=.15):
     probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
     masked_indices = torch.bernoulli(probability_matrix).bool()
 
-    # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-    indices_replaced = torch.bernoulli(torch.full(inputs.shape, 0.8)).bool() & masked_indices
-    inputs[indices_replaced] = tokenizer.mask_token_id
-
-    # 10% of the time, we replace masked input tokens with random word
-    indices_random = torch.bernoulli(torch.full(inputs.shape, 0.5)).bool() & masked_indices & ~indices_replaced
-    random_words = torch.randint(len(tokenizer), inputs.shape, dtype=torch.long)
-    inputs[indices_random] = random_words[indices_random]
+    # we replace masked input tokens with tokenizer.mask_token ([MASK])
+    inputs[masked_indices] = tokenizer.mask_token_id
 
     # The rest of the time (10% of the time) we keep the masked input tokens unchanged
     return inputs
@@ -292,8 +286,9 @@ class CustomMultiTaskModel(PreTrainedModel):
         if token_labels is not None:
             loss_fct = nn.BCEWithLogitsLoss()
             token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
-            mask = token_labels != -100
-            token_labels = token_labels.float() * mask.float()
+            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1).expand(-1, -1, token_logits.size(-1))
+            valid = token_labels != -100
+            token_labels = token_labels.float() * mask.float() * valid.float()
             token_logits = token_logits * mask.float()
             token_loss = loss_fct(token_logits.view(-1), token_labels.view(-1))
             loss += token_loss
@@ -381,6 +376,7 @@ def main():
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.pad_sense_id = PAD_SENSE_ID
+    config.mask_token_id = tokenizer.mask_token_id
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
