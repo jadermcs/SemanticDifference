@@ -30,6 +30,7 @@ print(f"Using device: {device}")
 
 # Constants
 MAX_LENGTH = 128
+MLM_PROBABILITY = .3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 NUM_EPOCHS = 10
@@ -65,37 +66,49 @@ def get_word_supersenses(word):
     synsets = wordnet.synsets(word)
     return set(synset.lexname() for synset in synsets)
 
-
 def load_data(datasets, split="train", mark_target=False, supersense=False):
     """Load and process the WiC dataset."""
-    data = []
+    all_data = []
     for dataset in datasets.split(","):
         with open(f"data/{dataset}.{split}.json", 'r') as f:
-            data.extend(json.load(f))
+            all_data.extend(json.load(f))
 
-    # Convert to Hugging Face dataset format
     processed_data = []
-    for item in data:
-        w1 = item['WORD_x']
-        w2 = item['WORD_y']
-        s1 = item["USAGE_x"] if not mark_target else item['USAGE_x'].replace(w1, f"{START_TARGET_TOKEN}{w1}{END_TARGET_TOKEN}")
-        s2 = item["USAGE_y"] if not mark_target else item['USAGE_y'].replace(w2, f"{START_TARGET_TOKEN}{w2}{END_TARGET_TOKEN}")
+    for item in all_data:
+        w1, w2 = item['WORD_x'], item['WORD_y']
+        s1 = item["USAGE_x"]
+        s2 = item["USAGE_y"]
+
+        if mark_target:
+            s1 = s1.replace(w1, f"{START_TARGET_TOKEN}{w1}{END_TARGET_TOKEN}")
+            s2 = s2.replace(w2, f"{START_TARGET_TOKEN}{w2}{END_TARGET_TOKEN}")
+
         if supersense:
-            s1 = word_tokenize(s1)
-            s2 = word_tokenize(s2)
-        data = {
-            'sentence1': s1,
-            'sentence2': s2,
-            'labels': 1 if item['LABEL'] == 'identical' else 0
-        }
-        if supersense:
-            supersenses1 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s1]
-            supersenses2 = [[SUPERSENSE_TO_ID[supersense] for supersense in get_word_supersenses(word)] for word in s2]
-            supersenses1 = [[1 if i in sp1 else 0 if len(sp1) else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp1 in supersenses1]
-            supersenses2 = [[1 if i in sp2 else 0 if len(sp2) else -100 for i in range(NUM_SUPERSENSE_CLASSES)] for sp2 in supersenses2]
-            data['supersenses1'] = supersenses1
-            data['supersenses2'] = supersenses2
-        processed_data.append(data)
+            s1_tokens = word_tokenize(s1)
+            s2_tokens = word_tokenize(s2)
+
+            def encode_supersenses(tokens):
+                ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
+                return [
+                    [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
+                    for word in tokens
+                ]
+
+            processed_entry = {
+                'sentence1': s1_tokens,
+                'sentence2': s2_tokens,
+                'labels': int(item['LABEL'] == 'identical'),
+                'supersenses1': encode_supersenses(s1_tokens),
+                'supersenses2': encode_supersenses(s2_tokens),
+            }
+        else:
+            processed_entry = {
+                'sentence1': s1,
+                'sentence2': s2,
+                'labels': int(item['LABEL'] == 'identical')
+            }
+
+        processed_data.append(processed_entry)
 
     return Dataset.from_list(processed_data)
 
@@ -127,7 +140,7 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
 #     return inputs, labels
 
 
-def mask_tokens(inputs, tokenizer, mlm_probability=.15):
+def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     """
     Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
     """
@@ -146,7 +159,7 @@ def mask_tokens(inputs, tokenizer, mlm_probability=.15):
     return inputs
 
 def preprocess_function(examples, tokenizer, supersense=False):
-    """Tokenize the input sentences."""
+    """Tokenize input sentences and optionally process supersense labels."""
     tokens = tokenizer(
         examples['sentence1'],
         examples['sentence2'],
@@ -157,25 +170,28 @@ def preprocess_function(examples, tokenizer, supersense=False):
         return_tensors='pt',
         is_split_into_words=supersense
     )
+
     if supersense:
-        s1 = examples['supersenses1']
-        s2 = examples['supersenses2']
-        new_supersenses = []
+        s1, s2 = examples['supersenses1'], examples['supersenses2']
         word_ids = tokens.word_ids()
-        supersenses = s1
-        passed = False
+        all_supersenses = []
+        current_supersenses = s1
+        mask_array = [-100] * NUM_SUPERSENSE_CLASSES
+        switched = False
+
         for word_id in word_ids:
             if word_id is None:
-                new_supersenses.append([-100 for _ in range(NUM_SUPERSENSE_CLASSES)])
-            elif not passed and word_id + 1 == len(s1):
-                new_supersenses.append(supersenses[word_id])
-                supersenses = s2
-                passed = True
+                all_supersenses.append(mask_array)
             else:
-                new_supersenses.append(supersenses[word_id])
-        tokens['token_labels'] = new_supersenses
+                if not switched and word_id + 1 == len(s1):
+                    switched = True
+                    all_supersenses.append(current_supersenses[word_id])
+                    current_supersenses = s2
+                else:
+                    all_supersenses.append(current_supersenses[word_id])
 
-    # tokens['input_ids'], tokens['mlm_labels'] = mask_tokens(tokens['input_ids'][0], tokenizer)
+        tokens['token_labels'] = all_supersenses
+
     tokens['input_ids'] = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['labels'] = examples['labels']
     return tokens
@@ -223,10 +239,8 @@ class CustomMultiTaskModel(PreTrainedModel):
         output_hidden_states=None,
         return_dict=None,
     ):
-        seq_length = input_ids.size(1)
-
         # 1. Get standard word embeddings
-        word_embeds = self.model.roberta.embeddings.word_embeddings(input_ids)
+        word_embeds = self.model.model.embeddings.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
         if sense_ids is not None:
@@ -238,21 +252,21 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         # --- Replicate the rest of BertEmbeddings forward pass ---
         # 4. Add position embeddings
-        position_ids = torch.arange(
-            self.config.pad_token_id + 1, seq_length + self.config.pad_token_id + 1, dtype=torch.long, device=input_ids.device
-            )
-        position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-        position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
+        # position_ids = torch.arange(
+        #     self.config.pad_token_id + 1, input_ids.size(1) + self.config.pad_token_id + 1, dtype=torch.long, device=input_ids.device
+        #     )
+        # position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+        # position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
 
         # 5. Add token type embeddings
-        token_type_embeds = self.model.roberta.embeddings.token_type_embeddings(token_type_ids.squeeze(1))
+        # token_type_embeds = self.model.roberta.embeddings.token_type_embeddings(token_type_ids.squeeze(1))
 
         # 6. Sum all embeddings
-        final_embeddings = word_embeds + position_embeds + token_type_embeds
+        # final_embeddings = word_embeds + position_embeds + token_type_embeds
 
         # 7. Apply LayerNorm and Dropout
-        final_embeddings = self.model.roberta.embeddings.LayerNorm(final_embeddings)
-        final_embeddings = self.model.roberta.embeddings.dropout(final_embeddings)
+        # final_embeddings = self.model.roberta.embeddings.LayerNorm(final_embeddings)
+        # final_embeddings = self.model.roberta.embeddings.dropout(final_embeddings)
         # --- End Replication ---
 
         # 8. Pass final embeddings to BERT encoder
@@ -260,9 +274,9 @@ class CustomMultiTaskModel(PreTrainedModel):
         # We also need to pass the `attention_mask`
         # `token_type_ids` are effectively handled by the embedding addition above
         outputs = self.model(
-            inputs_embeds=final_embeddings,
+            inputs_embeds=word_embeds,
             # input_ids=input_ids,
-            attention_mask=attention_mask,
+            attention_mask=attention_mask.squeeze(1),
             labels=mlm_labels,
             token_type_ids=None, # Not needed here as types are in final_embeddings
             output_hidden_states=True,
@@ -284,13 +298,20 @@ class CustomMultiTaskModel(PreTrainedModel):
             mlm_loss = outputs.loss
             loss += mlm_loss
         if token_labels is not None:
+            # Compute token classification loss only on masked and valid positions
+            token_logits = self.token_classifier(sequence_output)  # (B, L, C)
+
+            # Create mask for valid positions (masked tokens and non -100 labels)
+            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1)  # (B, L, 1)
+            valid_mask = (token_labels != -100)              # (B, L, 1)
+            combined_mask = mask & valid_mask                              # (B, L, 1)
+
+            # Apply the mask
+            token_labels = token_labels.float() * combined_mask.squeeze(-1)  # match logits' shape
+            token_logits = token_logits * combined_mask
+
+            # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
-            token_logits = self.token_classifier(outputs.hidden_states[-1]) # (batch_size, sequence_length, num_token_labels)
-            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1).expand(-1, -1, token_logits.size(-1))
-            valid = token_labels != -100
-            mask = mask & valid
-            token_labels = token_labels.float() * mask
-            token_logits = token_logits * mask
             token_loss = loss_fct(token_logits, token_labels)
             loss += token_loss
         if labels is not None:
