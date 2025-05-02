@@ -36,6 +36,8 @@ WARMUP_STEPS = 500
 START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
+WEIGHT_DECAY = 0.01
+EVAL_STEPS = 1
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -191,7 +193,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
 
         tokens['token_labels'] = all_supersenses
 
-    tokens['input_ids'] = mask_tokens(tokens['input_ids'][0], tokenizer)
+    # tokens['input_ids'] = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['labels'] = examples['labels']
     return tokens
 
@@ -239,7 +241,8 @@ class CustomMultiTaskModel(PreTrainedModel):
         return_dict=None,
     ):
         # 1. Get standard word embeddings
-        word_embeds = self.model.model.embeddings.tok_embeddings(input_ids)
+        embed = self.model.model.embeddings
+        word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
         if sense_ids is not None:
@@ -264,7 +267,6 @@ class CustomMultiTaskModel(PreTrainedModel):
         # final_embeddings = word_embeds + position_embeds + token_type_embeds
 
         # 7. Apply LayerNorm and Dropout
-        embed = self.model.model.embeddings
         final_embeddings = embed.drop(embed.norm(word_embeds))
         # final_embeddings = self.model.roberta.embeddings.LayerNorm(final_embeddings)
         # final_embeddings = self.model.roberta.embeddings.dropout(final_embeddings)
@@ -303,13 +305,11 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
             # Create mask for valid positions (masked tokens and non -100 labels)
-            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1)  # (B, L, 1)
-            valid_mask = (token_labels != -100)              # (B, L, 1)
-            combined_mask = mask & valid_mask                              # (B, L, 1)
+            mask = (token_labels != -100)              # (B, L, 1)
 
             # Apply the mask
-            token_labels = token_labels.float() * combined_mask.squeeze(-1)  # match logits' shape
-            token_logits = token_logits * combined_mask
+            token_labels = token_labels.float() * mask
+            token_logits = token_logits * mask
 
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
@@ -413,9 +413,9 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        weight_decay=0.01,
+        weight_decay=WEIGHT_DECAY,
         eval_strategy="steps",
-        eval_steps=500,
+        eval_steps=EVAL_STEPS,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
