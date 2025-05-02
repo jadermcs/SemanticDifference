@@ -193,7 +193,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
 
         tokens['token_labels'] = all_supersenses
 
-    # tokens['input_ids'] = mask_tokens(tokens['input_ids'][0], tokenizer)
+    tokens['input_ids'] = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['labels'] = examples['labels']
     return tokens
 
@@ -305,11 +305,13 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
             # Create mask for valid positions (masked tokens and non -100 labels)
-            mask = (token_labels != -100)              # (B, L, 1)
+            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1)  # (B, L, 1)
+            valid_mask = (token_labels != -100)              # (B, L, 1)
+            combined_mask = mask & valid_mask                              # (B, L, 1)
 
             # Apply the mask
-            token_labels = token_labels.float() * mask
-            token_logits = token_logits * mask
+            token_labels = token_labels.float() * combined_mask.squeeze(-1)  # match logits' shape
+            token_logits = token_logits * combined_mask
 
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
@@ -334,19 +336,79 @@ class CustomMultiTaskModel(PreTrainedModel):
         )
 
 
+# def compute_metrics(pred):
+#     """Compute metrics for evaluation."""
+#     labels = pred.label_ids
+#     preds = pred.predictions.argmax(-1)
+#     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
+#     acc = accuracy_score(labels, preds)
+
+#     return {
+#         'accuracy': acc,
+#         'f1': f1,
+#         'precision': precision,
+#         'recall': recall
+#     }
+
 def compute_metrics(pred):
-    """Compute metrics for evaluation."""
-    labels = pred.label_ids
-    preds = pred.predictions.argmax(-1)
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
-    acc = accuracy_score(labels, preds)
+    """Compute metrics for both sequence and token classification."""
+    # Unpack predictions and labels
+    seq_preds = pred.predictions['sequence']
+    token_preds = pred.predictions['token']
+    seq_labels = pred.label_ids['sequence']
+    token_labels = pred.label_ids['token']
+
+    # Sequence Classification (e.g., sentiment classification)
+    seq_preds_argmax = seq_preds.argmax(-1)
+    seq_precision, seq_recall, seq_f1, _ = precision_recall_fscore_support(
+        seq_labels, seq_preds_argmax, average='weighted'
+    )
+    seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
+
+    # Token Classification (e.g., NER)
+    token_preds_argmax = token_preds.argmax(-1)
+
+    # Flatten inputs, ignore special tokens (commonly labeled -100)
+    true_token_labels = token_labels.view(-1)
+    pred_token_labels = token_preds_argmax.view(-1)
+    mask = true_token_labels != -100
+    true_token_labels = true_token_labels[mask]
+    pred_token_labels = pred_token_labels[mask]
+
+    token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
+        true_token_labels, pred_token_labels, average='weighted'
+    )
+    token_acc = accuracy_score(true_token_labels, pred_token_labels)
 
     return {
-        'accuracy': acc,
-        'f1': f1,
-        'precision': precision,
-        'recall': recall
+        # Sequence classification
+        'seq_accuracy': seq_acc,
+        'seq_f1': seq_f1,
+        'seq_precision': seq_precision,
+        'seq_recall': seq_recall,
+
+        # Token classification
+        'token_accuracy': token_acc,
+        'token_f1': token_f1,
+        'token_precision': token_precision,
+        'token_recall': token_recall
     }
+
+class MultiTaskTrainer(Trainer):
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        inputs = inputs.copy()
+        labels = {
+            "sequence": inputs.get("labels"),
+            "token": inputs.get("token_labels")
+        }
+        with torch.no_grad():
+            outputs = model(**inputs, return_dict=True)
+
+        logits = {
+            "sequence": outputs.sequence_logits,
+            "token": outputs.token_logits
+        }
+        return None, logits, labels
 
 
 def main():
@@ -427,7 +489,7 @@ def main():
     )
 
     # Initialize trainer
-    trainer = Trainer(
+    trainer = MultiTaskTrainer(
         model=model,
         args=training_args,
         train_dataset=datasets["train"],
