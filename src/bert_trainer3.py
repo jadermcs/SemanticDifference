@@ -37,7 +37,7 @@ START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
-EVAL_STEPS = 1
+EVAL_STEPS = 500
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -366,17 +366,16 @@ def compute_metrics(pred):
     seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
 
     # Token Classification (e.g., NER)
-    token_preds_argmax = token_preds.argmax(-1)
+    token_preds_argmax = token_preds > .5
 
     # Flatten inputs, ignore special tokens (commonly labeled -100)
-    true_token_labels = []
-    pred_token_labels = []
+    true_token_labels = token_labels.flatten()
+    pred_token_labels = token_preds_argmax.flatten()
 
-    for true_seq, pred_seq in zip(token_labels, token_preds_argmax):
-        for true_label, pred_label in zip(true_seq, pred_seq):
-            if true_label != -100:
-                true_token_labels.append(true_label)
-                pred_token_labels.append(pred_label)
+    mask = true_token_labels != 100
+    true_token_labels = true_token_labels[mask]
+    pred_token_labels = pred_token_labels[mask]
+
 
     token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
         true_token_labels, pred_token_labels, average='weighted'
@@ -482,7 +481,7 @@ def main():
         eval_strategy="steps",
         eval_steps=EVAL_STEPS,
         load_best_model_at_end=True,
-        metric_for_best_model="f1",
+        metric_for_best_model="seq_f1",
         greater_is_better=True,
         label_names=["labels"],
         fp16=args.fp16,
