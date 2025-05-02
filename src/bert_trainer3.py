@@ -369,11 +369,14 @@ def compute_metrics(pred):
     token_preds_argmax = token_preds.argmax(-1)
 
     # Flatten inputs, ignore special tokens (commonly labeled -100)
-    true_token_labels = token_labels.view(-1)
-    pred_token_labels = token_preds_argmax.view(-1)
-    mask = true_token_labels != -100
-    true_token_labels = true_token_labels[mask]
-    pred_token_labels = pred_token_labels[mask]
+    true_token_labels = []
+    pred_token_labels = []
+
+    for true_seq, pred_seq in zip(token_labels, token_preds_argmax):
+        for true_label, pred_label in zip(true_seq, pred_seq):
+            if true_label != -100:
+                true_token_labels.append(true_label)
+                pred_token_labels.append(pred_label)
 
     token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
         true_token_labels, pred_token_labels, average='weighted'
