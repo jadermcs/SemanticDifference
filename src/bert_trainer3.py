@@ -8,6 +8,7 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from functools import lru_cache
 import json
+from tqdm import tqdm
 from transformers import (
     AutoModelForMaskedLM,
     AutoTokenizer,
@@ -75,7 +76,7 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
             all_data.extend(json.load(f))
 
     processed_data = []
-    for item in all_data:
+    for item in tqdm(all_data):
         w1, w2 = item['WORD_x'], item['WORD_y']
         s1 = item["USAGE_x"]
         s2 = item["USAGE_y"]
@@ -305,13 +306,13 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
             # Create mask for valid positions (masked tokens and non -100 labels)
-            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1)  # (B, L, 1)
-            valid_mask = (token_labels != -100)              # (B, L, 1)
-            combined_mask = mask & valid_mask                              # (B, L, 1)
+            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1)
+            valid_mask = (token_labels != -100)
+            combined_mask = mask & valid_mask
 
             # Apply the mask
-            token_labels = token_labels.float() * combined_mask.squeeze(-1)  # match logits' shape
-            token_logits = token_logits * combined_mask
+            token_labels = token_labels[combined_mask].float()  # match logits' shape
+            token_logits = token_logits[combined_mask]
 
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
@@ -456,7 +457,8 @@ def main():
 
     datasets = datasets.map(
         preprocess_function,
-        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense}
+        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
+        num_proc=4,
     )
 
     # Initialize model
