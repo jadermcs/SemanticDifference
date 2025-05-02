@@ -33,7 +33,6 @@ MAX_LENGTH = 128
 MLM_PROBABILITY = .3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
-NUM_EPOCHS = 10
 START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
@@ -265,6 +264,8 @@ class CustomMultiTaskModel(PreTrainedModel):
         # final_embeddings = word_embeds + position_embeds + token_type_embeds
 
         # 7. Apply LayerNorm and Dropout
+        embed = self.model.model.embeddings
+        final_embeddings = embed.drop(embed.norm(word_embeds))
         # final_embeddings = self.model.roberta.embeddings.LayerNorm(final_embeddings)
         # final_embeddings = self.model.roberta.embeddings.dropout(final_embeddings)
         # --- End Replication ---
@@ -274,7 +275,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         # We also need to pass the `attention_mask`
         # `token_type_ids` are effectively handled by the embedding addition above
         outputs = self.model(
-            inputs_embeds=word_embeds,
+            inputs_embeds=final_embeddings,
             # input_ids=input_ids,
             attention_mask=attention_mask.squeeze(1),
             labels=mlm_labels,
@@ -411,7 +412,7 @@ def main():
         learning_rate=LEARNING_RATE,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        num_train_epochs=NUM_EPOCHS,
+        num_train_epochs=args.epochs,
         weight_decay=0.01,
         eval_strategy="steps",
         eval_steps=500,
