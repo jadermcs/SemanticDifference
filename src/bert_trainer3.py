@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 import argparse
+from nltk.corpus.reader.sinica_treebank import WORD
 import torch
 import torch.nn as nn
 from nltk.corpus import wordnet
@@ -158,13 +159,16 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     inputs[masked_indices] = tokenizer.mask_token_id
 
     # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-    return inputs
+    return inputs, masked_indices
 
 def preprocess_function(examples, tokenizer, supersense=False):
     """Tokenize input sentences and optionally process supersense labels."""
+    if supersense:
+        sent = examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2']
+    else:
+        sent = examples['sentence1'] + tokenizer.sep_token + examples['sentence2']
     tokens = tokenizer(
-        examples['sentence1'],
-        examples['sentence2'],
+        sent,
         truncation=True,
         max_length=MAX_LENGTH,
         padding='max_length',
@@ -172,29 +176,25 @@ def preprocess_function(examples, tokenizer, supersense=False):
         return_tensors='pt',
         is_split_into_words=supersense
     )
+    tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
 
     if supersense:
-        s1, s2 = examples['supersenses1'], examples['supersenses2']
+        senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
         word_ids = tokens.word_ids()
-        all_supersenses = []
-        current_supersenses = s1
-        mask_array = [-100] * NUM_SUPERSENSE_CLASSES
-        switched = False
+        word_ids = torch.tensor([-1 if id is None else id for id in word_ids])
+        word_ids[~mask_array] = -1
+        all_supersenses = torch.full((len(word_ids), NUM_SUPERSENSE_CLASSES), -100)
 
-        for word_id in word_ids:
-            if word_id is None:
-                all_supersenses.append(mask_array)
-            else:
-                if not switched and word_id + 1 == len(s1):
-                    switched = True
-                    all_supersenses.append(current_supersenses[word_id])
-                    current_supersenses = s2
-                else:
-                    all_supersenses.append(current_supersenses[word_id])
+        valid_positions = word_ids != -1
+        valid_word_ids = word_ids[valid_positions]
 
+        # Convert senses to tensor if it's not already
+        senses_tensor = torch.tensor(senses)  # shape: (num_words, NUM_SUPERSENSE_CLASSES)
+
+        # Assign labels using advanced indexing
+        all_supersenses[valid_positions] = senses_tensor[valid_word_ids]
         tokens['token_labels'] = all_supersenses
 
-    tokens['input_ids'] = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['labels'] = examples['labels']
     return tokens
 
@@ -306,13 +306,11 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
             # Create mask for valid positions (masked tokens and non -100 labels)
-            mask = (input_ids == self.config.mask_token_id).unsqueeze(-1)
             valid_mask = (token_labels != -100)
-            combined_mask = mask & valid_mask
 
             # Apply the mask
-            token_labels = token_labels[combined_mask].float()  # match logits' shape
-            token_logits = token_logits[combined_mask]
+            token_labels = token_labels[valid_mask].float()  # match logits' shape
+            token_logits = token_logits[valid_mask]
 
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
