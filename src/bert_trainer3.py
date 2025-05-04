@@ -200,7 +200,10 @@ def preprocess_function(examples, tokenizer, supersense=False):
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
-    loss: Optional[torch.FloatTensor | float] = None
+    loss: Optional[torch.FloatTensor] = None
+    mlm_loss: Optional[torch.FloatTensor] = None
+    token_loss: Optional[torch.FloatTensor] = None
+    sequence_loss: Optional[torch.FloatTensor] = None
     mlm_logits: Optional[torch.FloatTensor] = None
     sequence_logits: Optional[torch.FloatTensor] = None
     token_logits: Optional[torch.FloatTensor] = None
@@ -290,7 +293,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
 
         # --- Calculate Losses ---
-        loss = 0.0
+        loss = torch.tensor(0.0, device=sequence_output.device)
         mlm_loss = None
         sequence_loss = None
         token_logits = None
@@ -326,6 +329,9 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         return MultiTaskModelOutput(
             loss=loss,
+            mlm_loss=mlm_loss,
+            token_loss=token_loss,
+            sequence_loss=sequence_loss,
             token_logits=token_logits,
             mlm_logits=mlm_logits,
             sequence_logits=sequence_logits,
@@ -368,8 +374,6 @@ def compute_metrics(pred):
     token_preds_argmax = token_preds > .5
 
     # Flatten inputs, ignore special tokens (commonly labeled -100)
-    print(token_labels.shape)
-    print(token_preds_argmax.shape)
     true_token_labels = token_labels.flatten()
     pred_token_labels = token_preds_argmax.flatten()
 
