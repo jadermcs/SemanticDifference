@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 import argparse
-from nltk.corpus.reader.sinica_treebank import WORD
 import torch
 import torch.nn as nn
 from nltk.corpus import wordnet
@@ -39,7 +38,7 @@ START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
-EVAL_STEPS = 500
+EVAL_STEPS = 1
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -310,11 +309,11 @@ class CustomMultiTaskModel(PreTrainedModel):
 
             # Apply the mask
             token_labels = token_labels[valid_mask].float()  # match logits' shape
-            token_logits = token_logits[valid_mask]
+            masked_token_logits = token_logits[valid_mask]
 
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
-            token_loss = loss_fct(token_logits, token_labels)
+            token_loss = loss_fct(masked_token_logits, token_labels)
             loss += token_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
@@ -353,8 +352,9 @@ def compute_metrics(pred):
     """Compute metrics for both sequence and token classification."""
     # Unpack predictions and labels
     seq_preds = pred.predictions['sequence']
-    token_preds = pred.predictions['token']
     seq_labels = pred.label_ids['sequence']
+
+    token_preds = pred.predictions['token']
     token_labels = pred.label_ids['token']
 
     # Sequence Classification (e.g., sentiment classification)
@@ -368,6 +368,8 @@ def compute_metrics(pred):
     token_preds_argmax = token_preds > .5
 
     # Flatten inputs, ignore special tokens (commonly labeled -100)
+    print(token_labels.shape)
+    print(token_preds_argmax.shape)
     true_token_labels = token_labels.flatten()
     pred_token_labels = token_preds_argmax.flatten()
 
