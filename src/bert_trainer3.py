@@ -38,7 +38,7 @@ START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
-EVAL_STEPS = 500
+EVAL_STEPS = 1
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -200,7 +200,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
-    loss: Optional[torch.FloatTensor] = None
+    loss: Optional[float] = None
     mlm_loss: Optional[torch.FloatTensor] = None
     token_loss: Optional[torch.FloatTensor] = None
     sequence_loss: Optional[torch.FloatTensor] = None
@@ -293,7 +293,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
 
         # --- Calculate Losses ---
-        loss = torch.tensor(0.0, device=sequence_output.device)
+        loss = 0.0
         mlm_loss = None
         sequence_loss = None
         token_logits = None
@@ -317,7 +317,8 @@ class CustomMultiTaskModel(PreTrainedModel):
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
             token_loss = loss_fct(masked_token_logits, token_labels)
-            loss += token_loss
+            # uniform_loss = masked_token_logits.sum() / token_labels.sum()
+            loss += token_loss #+ uniform_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             sequence_loss = loss_fct(sequence_logits.view(-1, self.num_labels), labels.view(-1))
@@ -338,21 +339,6 @@ class CustomMultiTaskModel(PreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
-# def compute_metrics(pred):
-#     """Compute metrics for evaluation."""
-#     labels = pred.label_ids
-#     preds = pred.predictions.argmax(-1)
-#     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
-#     acc = accuracy_score(labels, preds)
-
-#     return {
-#         'accuracy': acc,
-#         'f1': f1,
-#         'precision': precision,
-#         'recall': recall
-#     }
 
 def compute_metrics(pred):
     """Compute metrics for both sequence and token classification."""
@@ -389,12 +375,14 @@ def compute_metrics(pred):
 
     return {
         # Sequence classification
+        'seq_loss': pred.loss['sequence'],
         'seq_accuracy': seq_acc,
         'seq_f1': seq_f1,
         'seq_precision': seq_precision,
         'seq_recall': seq_recall,
 
         # Token classification
+        'token_loss': pred.loss['token'],
         'token_accuracy': token_acc,
         'token_f1': token_f1,
         'token_precision': token_precision,
@@ -411,6 +399,10 @@ class MultiTaskTrainer(Trainer):
         with torch.no_grad():
             outputs = model(**inputs, return_dict=True)
 
+        loss = {
+            "sequence": outputs.sequence_loss,
+            "token": outputs.token_loss
+        }
         logits = {
             "sequence": outputs.sequence_logits,
             "token": outputs.token_logits
