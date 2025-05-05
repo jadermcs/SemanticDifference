@@ -68,7 +68,7 @@ def get_word_supersenses(word):
     synsets = wordnet.synsets(word)
     return set(synset.lexname() for synset in synsets)
 
-def load_data(datasets, split="train", mark_target=False, supersense=False):
+def load_data(datasets, split="train", mark_target=False):
     """Load and process the WiC dataset."""
     all_data = []
     for dataset in datasets.split(","):
@@ -85,30 +85,23 @@ def load_data(datasets, split="train", mark_target=False, supersense=False):
             s1 = s1.replace(w1, f"{START_TARGET_TOKEN}{w1}{END_TARGET_TOKEN}")
             s2 = s2.replace(w2, f"{START_TARGET_TOKEN}{w2}{END_TARGET_TOKEN}")
 
-        if supersense:
-            s1_tokens = word_tokenize(s1)
-            s2_tokens = word_tokenize(s2)
+        s1_tokens = word_tokenize(s1)
+        s2_tokens = word_tokenize(s2)
 
-            def encode_supersenses(tokens):
-                ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
-                return [
-                    [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
-                    for word in tokens
-                ]
+        def encode_supersenses(tokens):
+            ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
+            return [
+                [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
+                for word in tokens
+            ]
 
-            processed_entry = {
-                'sentence1': s1_tokens,
-                'sentence2': s2_tokens,
-                'labels': int(item['LABEL'] == 'identical'),
-                'supersenses1': encode_supersenses(s1_tokens),
-                'supersenses2': encode_supersenses(s2_tokens),
-            }
-        else:
-            processed_entry = {
-                'sentence1': s1,
-                'sentence2': s2,
-                'labels': int(item['LABEL'] == 'identical')
-            }
+        processed_entry = {
+            'sentence1': s1_tokens,
+            'sentence2': s2_tokens,
+            'labels': int(item['LABEL'] == 'identical'),
+            'supersenses1': encode_supersenses(s1_tokens),
+            'supersenses2': encode_supersenses(s2_tokens),
+        }
 
         processed_data.append(processed_entry)
 
@@ -162,10 +155,7 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
 
 def preprocess_function(examples, tokenizer, supersense=False):
     """Tokenize input sentences and optionally process supersense labels."""
-    if supersense:
-        sent = examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2']
-    else:
-        sent = examples['sentence1'] + tokenizer.sep_token + examples['sentence2']
+    sent = examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2']
     tokens = tokenizer(
         sent,
         truncation=True,
@@ -173,25 +163,25 @@ def preprocess_function(examples, tokenizer, supersense=False):
         padding='max_length',
         return_token_type_ids=True,
         return_tensors='pt',
-        is_split_into_words=supersense
+        is_split_into_words=True
     )
     tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
 
+    senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
+    word_ids = tokens.word_ids()
+    word_ids = torch.tensor([-1 if id is None else id for id in word_ids])
+    word_ids[~mask_array] = -1
+    all_supersenses = torch.full((len(word_ids), NUM_SUPERSENSE_CLASSES), -100)
+
+    valid_positions = word_ids != -1
+    valid_word_ids = word_ids[valid_positions]
+
+    # Convert senses to tensor if it's not already
+    senses_tensor = torch.tensor(senses)  # shape: (num_words, NUM_SUPERSENSE_CLASSES)
+
+    # Assign labels using advanced indexing
+    all_supersenses[valid_positions] = senses_tensor[valid_word_ids]
     if supersense:
-        senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
-        word_ids = tokens.word_ids()
-        word_ids = torch.tensor([-1 if id is None else id for id in word_ids])
-        word_ids[~mask_array] = -1
-        all_supersenses = torch.full((len(word_ids), NUM_SUPERSENSE_CLASSES), -100)
-
-        valid_positions = word_ids != -1
-        valid_word_ids = word_ids[valid_positions]
-
-        # Convert senses to tensor if it's not already
-        senses_tensor = torch.tensor(senses)  # shape: (num_words, NUM_SUPERSENSE_CLASSES)
-
-        # Assign labels using advanced indexing
-        all_supersenses[valid_positions] = senses_tensor[valid_word_ids]
         tokens['token_labels'] = all_supersenses
 
     tokens['labels'] = examples['labels']
@@ -200,10 +190,10 @@ def preprocess_function(examples, tokenizer, supersense=False):
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
-    loss: Optional[float] = None
-    mlm_loss: Optional[torch.FloatTensor] = None
-    token_loss: Optional[torch.FloatTensor] = None
-    sequence_loss: Optional[torch.FloatTensor] = None
+    loss: Optional[torch.Tensor] = None
+    mlm_loss: Optional[torch.Tensor] = None
+    token_loss: Optional[torch.Tensor] = None
+    sequence_loss: Optional[torch.Tensor] = None
     mlm_logits: Optional[torch.FloatTensor] = None
     sequence_logits: Optional[torch.FloatTensor] = None
     token_logits: Optional[torch.FloatTensor] = None
@@ -250,35 +240,10 @@ class CustomMultiTaskModel(PreTrainedModel):
         # 2. Get sense embeddings
         if sense_ids is not None:
             sense_embeds = self.sense_embeddings(sense_ids)
-            # 3. Sum word and sense embedings
-            # Make sure sense embeddings for PAD tokens are zero (handled by padding_idx)
-            # or explicitly zero them out if needed based on attention mask/padding id.
             word_embeds = word_embeds + sense_embeds
 
-        # --- Replicate the rest of BertEmbeddings forward pass ---
-        # 4. Add position embeddings
-        # position_ids = torch.arange(
-        #     self.config.pad_token_id + 1, input_ids.size(1) + self.config.pad_token_id + 1, dtype=torch.long, device=input_ids.device
-        #     )
-        # position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-        # position_embeds = self.model.roberta.embeddings.position_embeddings(position_ids)
-
-        # 5. Add token type embeddings
-        # token_type_embeds = self.model.roberta.embeddings.token_type_embeddings(token_type_ids.squeeze(1))
-
-        # 6. Sum all embeddings
-        # final_embeddings = word_embeds + position_embeds + token_type_embeds
-
-        # 7. Apply LayerNorm and Dropout
         final_embeddings = embed.drop(embed.norm(word_embeds))
-        # final_embeddings = self.model.roberta.embeddings.LayerNorm(final_embeddings)
-        # final_embeddings = self.model.roberta.embeddings.dropout(final_embeddings)
-        # --- End Replication ---
 
-        # 8. Pass final embeddings to BERT encoder
-        # We pass `inputs_embeds` instead of `input_ids`
-        # We also need to pass the `attention_mask`
-        # `token_type_ids` are effectively handled by the embedding addition above
         outputs = self.model(
             inputs_embeds=final_embeddings,
             # input_ids=input_ids,
@@ -290,13 +255,14 @@ class CustomMultiTaskModel(PreTrainedModel):
         )
 
         sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
+
         sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
+        token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
         # --- Calculate Losses ---
-        loss = 0.0
+        loss = torch.tensor(0.)
         mlm_loss = None
         sequence_loss = None
-        token_logits = None
         mlm_logits = None
         token_loss = None
 
@@ -304,9 +270,6 @@ class CustomMultiTaskModel(PreTrainedModel):
             mlm_loss = outputs.loss
             loss += mlm_loss
         if token_labels is not None:
-            # Compute token classification loss only on masked and valid positions
-            token_logits = self.token_classifier(sequence_output)  # (B, L, C)
-
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = (token_labels != -100)
 
@@ -346,8 +309,8 @@ def compute_metrics(pred):
     seq_preds = pred.predictions['sequence']
     seq_labels = pred.label_ids['sequence']
 
-    token_preds = pred.predictions['token']
-    token_labels = pred.label_ids['token']
+    token_preds = pred.predictions.get('token')
+    token_labels = pred.label_ids.get('token')
 
     # Sequence Classification (e.g., sentiment classification)
     seq_preds_argmax = seq_preds.argmax(-1)
@@ -357,56 +320,60 @@ def compute_metrics(pred):
     seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
 
     # Token Classification (e.g., NER)
-    token_preds_argmax = token_preds > .5
+    token_acc = 0.0
+    token_f1 = 0.0
+    token_precision = 0.0
+    token_recall = 0.0
+    if token_labels is not None:
+        token_preds_argmax = token_preds > .5
 
-    # Flatten inputs, ignore special tokens (commonly labeled -100)
-    true_token_labels = token_labels.flatten()
-    pred_token_labels = token_preds_argmax.flatten()
+        # Flatten inputs, ignore special tokens (commonly labeled -100)
+        true_token_labels = token_labels.flatten()
+        pred_token_labels = token_preds_argmax.flatten()
 
-    mask = true_token_labels != 100
-    true_token_labels = true_token_labels[mask]
-    pred_token_labels = pred_token_labels[mask]
+        mask = true_token_labels != 100
+        true_token_labels = true_token_labels[mask]
+        pred_token_labels = pred_token_labels[mask]
 
+        token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
+            true_token_labels, pred_token_labels, average='weighted'
+        )
+        token_acc = accuracy_score(true_token_labels, pred_token_labels)
 
-    token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
-        true_token_labels, pred_token_labels, average='weighted'
-    )
-    token_acc = accuracy_score(true_token_labels, pred_token_labels)
-
-    return {
+    metrics = {
         # Sequence classification
-        'seq_loss': pred.loss['sequence'],
         'seq_accuracy': seq_acc,
         'seq_f1': seq_f1,
         'seq_precision': seq_precision,
         'seq_recall': seq_recall,
-
-        # Token classification
-        'token_loss': pred.loss['token'],
-        'token_accuracy': token_acc,
-        'token_f1': token_f1,
-        'token_precision': token_precision,
-        'token_recall': token_recall
     }
+    # Token classification
+    if token_labels is not None:
+        metrics.update({
+            'token_accuracy': token_acc,
+            'token_f1': token_f1,
+            'token_precision': token_precision,
+            'token_recall': token_recall
+        })
+    return metrics
 
 class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
         labels = {
             "sequence": inputs.get("labels"),
-            "token": inputs.get("token_labels")
         }
+        if "token_labels" in inputs:
+            labels["token"] = inputs["token_labels"]
+
         with torch.no_grad():
             outputs = model(**inputs, return_dict=True)
 
-        loss = {
-            "sequence": outputs.sequence_loss,
-            "token": outputs.token_loss
-        }
         logits = {
             "sequence": outputs.sequence_logits,
-            "token": outputs.token_logits
         }
+        if "token_logits" in outputs:
+            logits["token"] = outputs["token_logits"]
         return None, logits, labels
 
 
@@ -440,8 +407,8 @@ def main():
     )
 
     # Load dataset
-    train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target, supersense=args.supersense)
-    test_dataset = load_data("wic", split="test", mark_target=args.mark_target, supersense=args.supersense)
+    train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
+    test_dataset = load_data("wic", split="test", mark_target=args.mark_target)
 
     datasets = DatasetDict({
         "train": train_dataset,
