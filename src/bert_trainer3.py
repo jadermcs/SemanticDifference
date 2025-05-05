@@ -247,7 +247,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         outputs = self.model(
             inputs_embeds=final_embeddings,
             # input_ids=input_ids,
-            attention_mask=attention_mask.squeeze(1),
+            attention_mask=attention_mask.squeeze(1) if attention_mask else None,
             labels=mlm_labels,
             token_type_ids=None, # Not needed here as types are in final_embeddings
             output_hidden_states=True,
@@ -260,7 +260,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
         # --- Calculate Losses ---
-        loss = torch.tensor(0.)
+        loss = torch.tensor(0., device=outputs.hidden_states.device)
         mlm_loss = None
         sequence_loss = None
         mlm_logits = None
