@@ -166,6 +166,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
         is_split_into_words=True
     )
     tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
+    tokens['attention_maks'] = tokens['attention_mask'][0]
 
     senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
     word_ids = tokens.word_ids()
@@ -247,7 +248,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         outputs = self.model(
             inputs_embeds=final_embeddings,
             # input_ids=input_ids,
-            attention_mask=attention_mask.squeeze(1) if attention_mask else None,
+            attention_mask=attention_mask,
             labels=mlm_labels,
             token_type_ids=None, # Not needed here as types are in final_embeddings
             output_hidden_states=True,
