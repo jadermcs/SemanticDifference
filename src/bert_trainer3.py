@@ -38,7 +38,7 @@ START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
-EVAL_STEPS = 1
+EVAL_STEPS = 500
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -260,7 +260,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
         # --- Calculate Losses ---
-        loss = torch.tensor(0., device=outputs.hidden_states.device)
+        loss = torch.tensor(0., device=sequence_output.device)
         mlm_loss = None
         sequence_loss = None
         mlm_logits = None
