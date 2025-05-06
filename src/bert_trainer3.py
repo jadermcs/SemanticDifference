@@ -167,7 +167,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
     )
     # tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['input_ids'] = tokens['input_ids'][0]
-    _, mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
+    _, mask_array = mask_tokens(tokens['input_ids'], tokenizer)
 
     senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
     word_ids = tokens.word_ids()
