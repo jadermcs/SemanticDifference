@@ -220,6 +220,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             nn.init.xavier_uniform_(self.sense_embeddings.weight)
 #
         # Example: Add a classification head
+        self.drop = nn.Dropout(config.classifier_dropout)
         self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels) # Binary classification
         self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels) # Token classification
         self.post_init()
@@ -261,7 +262,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             return_dict=True # Recommended
         )
 
-        sequence_output = outputs.hidden_states[-1] # Hidden states of the last layer
+        sequence_output = self.drop(outputs.hidden_states[-1]) # Hidden states of the last layer
 
         sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
         token_logits = self.token_classifier(sequence_output)  # (B, L, C)
@@ -326,11 +327,14 @@ def compute_metrics(pred):
     )
     seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
 
+    metrics = {
+        # Sequence classification
+        'seq_accuracy': seq_acc,
+        'seq_f1': seq_f1,
+        'seq_precision': seq_precision,
+        'seq_recall': seq_recall,
+    }
     # Token Classification (e.g., NER)
-    token_acc = 0.0
-    token_f1 = 0.0
-    token_precision = 0.0
-    token_recall = 0.0
     if token_labels is not None:
         token_preds_argmax = token_preds > .5
 
@@ -347,15 +351,7 @@ def compute_metrics(pred):
         )
         token_acc = accuracy_score(true_token_labels, pred_token_labels)
 
-    metrics = {
-        # Sequence classification
-        'seq_accuracy': seq_acc,
-        'seq_f1': seq_f1,
-        'seq_precision': seq_precision,
-        'seq_recall': seq_recall,
-    }
-    # Token classification
-    if token_labels is not None:
+        # Token classification
         metrics.update({
             'token_accuracy': token_acc,
             'token_f1': token_f1,
