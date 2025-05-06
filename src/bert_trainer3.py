@@ -172,23 +172,23 @@ def preprocess_function(examples, tokenizer, supersense=False):
     )
     # tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['input_ids'] = tokens['input_ids'][0]
-    _, mask_array = mask_tokens(tokens['input_ids'], tokenizer)
-
-    senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
-    word_ids = tokens.word_ids()
-    word_ids = torch.tensor([-1 if id is None else id for id in word_ids])
-    word_ids[~mask_array] = -1
-    all_supersenses = torch.full((len(word_ids), NUM_SUPERSENSE_CLASSES), -100)
-
-    valid_positions = word_ids != -1
-    valid_word_ids = word_ids[valid_positions]
-
-    # Convert senses to tensor if it's not already
-    senses_tensor = torch.tensor(senses)  # shape: (num_words, NUM_SUPERSENSE_CLASSES)
-
-    # Assign labels using advanced indexing
-    all_supersenses[valid_positions] = senses_tensor[valid_word_ids]
     if supersense:
+        _, mask_array = mask_tokens(tokens['input_ids'], tokenizer)
+
+        senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
+        word_ids = tokens.word_ids()
+        word_ids = torch.tensor([-1 if id is None else id for id in word_ids])
+        word_ids[~mask_array] = -1
+        all_supersenses = torch.full((len(word_ids), NUM_SUPERSENSE_CLASSES), -100)
+
+        valid_positions = word_ids != -1
+        valid_word_ids = word_ids[valid_positions]
+
+        # Convert senses to tensor if it's not already
+        senses_tensor = torch.tensor(senses)  # shape: (num_words, NUM_SUPERSENSE_CLASSES)
+
+        # Assign labels using advanced indexing
+        all_supersenses[valid_positions] = senses_tensor[valid_word_ids]
         tokens['token_labels'] = all_supersenses
 
     tokens['labels'] = examples['labels']
