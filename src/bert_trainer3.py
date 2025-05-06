@@ -165,7 +165,8 @@ def preprocess_function(examples, tokenizer, supersense=False):
         return_tensors='pt',
         is_split_into_words=True
     )
-    tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
+    # tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
+    _, mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
 
     senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
     word_ids = tokens.word_ids()
