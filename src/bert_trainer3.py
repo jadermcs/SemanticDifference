@@ -96,8 +96,10 @@ def load_data(datasets, split="train", mark_target=False):
             ]
 
         processed_entry = {
-            'sentence1': s1_tokens,
-            'sentence2': s2_tokens,
+            'sentence1': s1,
+            'sentence2': s2,
+            's1_tokenized': s1_tokens,
+            's2_tokenized': s2_tokens,
             'labels': int(item['LABEL'] == 'identical'),
             'supersenses1': encode_supersenses(s1_tokens),
             'supersenses2': encode_supersenses(s2_tokens),
@@ -155,7 +157,10 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
 
 def preprocess_function(examples, tokenizer, supersense=False):
     """Tokenize input sentences and optionally process supersense labels."""
-    sent = examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2']
+    if supersense:
+        sent = examples['s1_tokenized'] + [tokenizer.sep_token] + examples['s2_tokenized']
+    else:
+        sent = examples['sentence1'] + tokenizer.sep_token + examples['sentence2']
     tokens = tokenizer(
         sent,
         truncation=True,
@@ -163,7 +168,7 @@ def preprocess_function(examples, tokenizer, supersense=False):
         padding='max_length',
         return_token_type_ids=True,
         return_tensors='pt',
-        is_split_into_words=True
+        is_split_into_words=supersense
     )
     # tokens['input_ids'], mask_array = mask_tokens(tokens['input_ids'][0], tokenizer)
     tokens['input_ids'] = tokens['input_ids'][0]
