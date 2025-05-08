@@ -130,11 +130,13 @@ def tokenize_and_align_labels(examples, tokenizer):
     tokenized_inputs = tokenizer(
         examples["tokens"],
         truncation=True,
-        is_split_into_words=True,
+        max_length=MAX_LENGTH,
         padding='max_length',
-        max_length=MAX_LENGTH)
+        is_split_into_words=True,
+        return_tensors='pt',
+        )
 
-    mask = [[-100] * NUM_SUPERSENSE_CLASSES]
+    mask = ([-100] * NUM_SUPERSENSE_CLASSES)
 
     labels = []
     for i, label in enumerate(examples["token_labels"]):
@@ -156,30 +158,16 @@ def tokenize_and_align_labels(examples, tokenizer):
 
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
-    examples['tokens'] = examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2']
-    examples['token_labels'] = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
-    return examples
+    result = {
+        'tokens': examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2'],
+        'token_labels': examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
+    }
+    return result
 
 def align(examples, tokenizer, supersense=False):
     tokens = tokenize_and_align_labels(examples, tokenizer)
-    if supersense:
-        _, mask_array = mask_tokens(tokens['input_ids'], tokenizer)
-
-        senses = examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
-        word_ids = tokens.word_ids()
-        word_ids = torch.tensor([-1 if id is None else id for id in word_ids])
-        word_ids[~mask_array] = -1
-        all_supersenses = torch.full((len(word_ids), NUM_SUPERSENSE_CLASSES), -100)
-
-        valid_positions = word_ids != -1
-        valid_word_ids = word_ids[valid_positions]
-
-        # Convert senses to tensor if it's not already
-        senses_tensor = torch.tensor(senses)  # shape: (num_words, NUM_SUPERSENSE_CLASSES)
-
-        # Assign labels using advanced indexing
-        all_supersenses[valid_positions] = senses_tensor[valid_word_ids]
-        tokens['token_labels'] = all_supersenses
+    if not supersense:
+        del tokens['token_labels']
 
     tokens['labels'] = examples['labels']
     return tokens
@@ -421,6 +409,7 @@ def main():
         align,
         fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
         batched=True,
+        remove_columns=datasets['train'].column_names,
         # num_proc=4,
     )
 
