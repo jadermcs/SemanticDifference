@@ -405,6 +405,7 @@ def main():
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.pad_sense_id = PAD_SENSE_ID
     config.mask_token_id = tokenizer.mask_token_id
+    config.classifier_dropout = .1
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
