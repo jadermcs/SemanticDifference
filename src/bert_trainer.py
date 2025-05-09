@@ -172,9 +172,7 @@ def tokenize_and_align_labels(examples, tokenizer):
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
     return {
-        "sentences": examples["sentence1"]
-        + tokenizer.sep_token
-        + examples["sentence2"],
+        "sentences": f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}",
     }
 
 
@@ -477,7 +475,7 @@ def main():
         fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
         batched=True,
         remove_columns=datasets["train"].column_names,
-        # num_proc=4,
+        num_proc=4,
     )
 
     # Initialize model
