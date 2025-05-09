@@ -457,7 +457,9 @@ def main():
 
     # Initialize wandb
     if args.wandb_run_name is None:
-        args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier{'-supersense' if args.supersense else ''}"
+        args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
+        args.wandb_run_name += "-supersense" if args.supersense else ""
+        args.wandb_run_name += "-uniform" if args.uniform else ""
 
     wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
