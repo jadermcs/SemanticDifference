@@ -291,8 +291,10 @@ class CustomMultiTaskModel(PreTrainedModel):
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
             token_loss = loss_fct(masked_token_logits, token_labels)
-            # uniform_loss = masked_token_logits.sum() / token_labels.sum()
             loss += token_loss  # + uniform_loss
+            if self.config.uniform_token_loss:
+                uniform_loss = masked_token_logits.sum() / token_labels.sum()
+                loss += uniform_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             sequence_loss = loss_fct(
@@ -418,6 +420,12 @@ def main():
         help="Use supersense classification",
     )
     parser.add_argument(
+        "--uniform",
+        action="store_true",
+        default=False,
+        help="Use uniform regularization for supersense.",
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="output/bert-classifier",
@@ -484,6 +492,7 @@ def main():
     config.pad_sense_id = PAD_SENSE_ID
     config.mask_token_id = tokenizer.mask_token_id
     config.classifier_dropout = 0.1
+    config.uniform_token_loss = args.uniform
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
