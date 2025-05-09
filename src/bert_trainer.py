@@ -16,7 +16,7 @@ from transformers import (
     Trainer,
     AutoConfig,
     PreTrainedModel,
-    set_seed
+    set_seed,
 )
 import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
@@ -31,12 +31,12 @@ print(f"Using device: {device}")
 
 # Constants
 MAX_LENGTH = 128
-MLM_PROBABILITY = .3
+MLM_PROBABILITY = 0.3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
-PAD_SENSE_ID = 0 # Make sure sense ID 0 is reserved for this
+PAD_SENSE_ID = 0  # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
 EVAL_STEPS = 500
 
@@ -49,13 +49,15 @@ def get_supersense_classes():
     """Extract all supersense classes from WordNet."""
     supersenses = set()
     for synset in wordnet.all_synsets():
-        if hasattr(synset, 'lexname'):
+        if hasattr(synset, "lexname"):
             supersenses.add(synset.lexname())
     return sorted(list(supersenses))
 
 
 SUPERSENSE_CLASSES = get_supersense_classes()
-SUPERSENSE_TO_ID = {supersense: idx for idx, supersense in enumerate(SUPERSENSE_CLASSES)}
+SUPERSENSE_TO_ID = {
+    supersense: idx for idx, supersense in enumerate(SUPERSENSE_CLASSES)
+}
 NUM_SUPERSENSE_CLASSES = len(SUPERSENSE_CLASSES)
 
 
@@ -68,16 +70,25 @@ def get_word_supersenses(word):
     synsets = wordnet.synsets(word)
     return set(synset.lexname() for synset in synsets)
 
+
+def encode_supersenses(tokens):
+    ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
+    return [
+        [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
+        for word in tokens
+    ]
+
+
 def load_data(datasets, split="train", mark_target=False):
     """Load and process the WiC dataset."""
     all_data = []
     for dataset in datasets.split(","):
-        with open(f"data/{dataset}.{split}.json", 'r') as f:
+        with open(f"data/{dataset}.{split}.json", "r") as f:
             all_data.extend(json.load(f))
 
     processed_data = []
     for item in tqdm(all_data):
-        w1, w2 = item['WORD_x'], item['WORD_y']
+        w1, w2 = item["WORD_x"], item["WORD_y"]
         s1 = item["USAGE_x"]
         s2 = item["USAGE_y"]
 
@@ -85,22 +96,10 @@ def load_data(datasets, split="train", mark_target=False):
             s1 = s1.replace(w1, f"{START_TARGET_TOKEN}{w1}{END_TARGET_TOKEN}")
             s2 = s2.replace(w2, f"{START_TARGET_TOKEN}{w2}{END_TARGET_TOKEN}")
 
-        s1 = word_tokenize(s1)
-        s2 = word_tokenize(s2)
-
-        def encode_supersenses(tokens):
-            ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
-            return [
-                [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
-                for word in tokens
-            ]
-
         processed_entry = {
-            'sentence1': s1,
-            'sentence2': s2,
-            'labels': int(item['LABEL'] == 'identical'),
-            'supersenses1': encode_supersenses(s1),
-            'supersenses2': encode_supersenses(s2),
+            "sentence1": s1,
+            "sentence2": s2,
+            "labels": int(item["LABEL"] == "identical"),
         }
 
         processed_data.append(processed_entry)
@@ -114,7 +113,9 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     """
     # We sample a few tokens in each sequence for MLM training (with probability self.mlm_probability)
     probability_matrix = torch.full(inputs.shape, mlm_probability)
-    special_tokens_mask = tokenizer.get_special_tokens_mask(inputs, already_has_special_tokens=True)
+    special_tokens_mask = tokenizer.get_special_tokens_mask(
+        inputs, already_has_special_tokens=True
+    )
     special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
 
     probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
@@ -126,50 +127,62 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     # The rest of the time (10% of the time) we keep the masked input tokens unchanged
     return inputs, masked_indices
 
+
 def tokenize_and_align_labels(examples, tokenizer):
     tokenized_inputs = tokenizer(
-        examples["tokens"],
+        examples["sentences"],
         truncation=True,
+        return_offsets_mapping=True,
         max_length=MAX_LENGTH,
-        padding='max_length',
-        is_split_into_words=True,
-        return_tensors='pt',
-        )
-
-    mask = ([-100] * NUM_SUPERSENSE_CLASSES)
-
+        padding="max_length",
+        return_tensors="pt",
+    )
+    mask = [-100] * NUM_SUPERSENSE_CLASSES
     labels = []
-    for i, label in enumerate(examples["token_labels"]):
-        word_ids = tokenized_inputs.word_ids(batch_index=i)  # Map tokens to their respective word.
-        previous_word_idx = None
+    for i, offsets in enumerate(tokenized_inputs["offset_mapping"]):
+        text = examples["sentences"][i]
+        words = word_tokenize(text)
+        word_labels = encode_supersenses(words)
+        pointer = 0
+
+        # Create a char-to-word index
+        char_to_word = {}
+        for word_idx, word in enumerate(words):
+            for c in range(pointer, pointer + len(word)):
+                char_to_word[c] = word_idx
+            pointer += len(word) + 1  # account for space
+
         label_ids = []
-        for word_idx in word_ids:  # Set the special tokens to -100.
-            if word_idx is None:
+        for offset in offsets:
+            start, end = offset.tolist()
+            if start == end:
                 label_ids.append(mask)
-            elif word_idx != previous_word_idx:  # Only label the first token of a given word.
-                label_ids.append(label[word_idx])
+            elif start in char_to_word:
+                word_idx = char_to_word[start]
+                label_ids.append(word_labels[word_idx])
             else:
                 label_ids.append(mask)
-            previous_word_idx = word_idx
+
         labels.append(label_ids)
 
-    tokenized_inputs["token_labels"] = labels
+    tokenized_inputs["token_labels"] = torch.tensor(labels)
     return tokenized_inputs
+
 
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
-    result = {
-        'tokens': examples['sentence1'] + [tokenizer.sep_token] + examples['sentence2'],
-        'token_labels': examples['supersenses1'] + [[-100] * NUM_SUPERSENSE_CLASSES] + examples['supersenses2']
+    return {
+        "sentences": examples["sentence1"]
+        + tokenizer.sep_token
+        + examples["sentence2"],
     }
-    return result
+
 
 def align(examples, tokenizer, supersense=False):
     tokens = tokenize_and_align_labels(examples, tokenizer)
     if not supersense:
-        del tokens['token_labels']
-
-    tokens['labels'] = examples['labels']
+        del tokens["token_labels"]
+    tokens["labels"] = examples["labels"]
     return tokens
 
 
@@ -191,16 +204,26 @@ class CustomMultiTaskModel(PreTrainedModel):
         super().__init__(config)
         self.config = config
         self.num_labels = config.num_labels
-        self.model = AutoModelForMaskedLM.from_pretrained(config._name_or_path, config=config) # Or your specific base model
+        self.model = AutoModelForMaskedLM.from_pretrained(
+            config._name_or_path, config=config
+        )  # Or your specific base model
         if config.num_token_labels > 0:
-            self.sense_embeddings = nn.Embedding(config.num_token_labels, config.hidden_size, padding_idx=config.pad_sense_id)
+            self.sense_embeddings = nn.Embedding(
+                config.num_token_labels,
+                config.hidden_size,
+                padding_idx=config.pad_sense_id,
+            )
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings.weight)
-#
+        #
         # Example: Add a classification head
         self.drop = nn.Dropout(config.classifier_dropout)
-        self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels) # Binary classification
-        self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels) # Token classification
+        self.sequence_classifier = nn.Linear(
+            config.hidden_size, config.num_labels
+        )  # Binary classification
+        self.token_classifier = nn.Linear(
+            config.hidden_size, config.num_token_labels
+        )  # Token classification
         self.post_init()
 
     def forward(
@@ -212,9 +235,9 @@ class CustomMultiTaskModel(PreTrainedModel):
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
-        labels=None,        # Labels for sequence classification
-        mlm_labels=None, # Labels for MLM
-        token_labels=None,    # Labels for token classification
+        labels=None,  # Labels for sequence classification
+        mlm_labels=None,  # Labels for MLM
+        token_labels=None,  # Labels for token classification
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -235,18 +258,22 @@ class CustomMultiTaskModel(PreTrainedModel):
             # input_ids=input_ids,
             attention_mask=attention_mask.squeeze(1),
             labels=mlm_labels,
-            token_type_ids=None, # Not needed here as types are in final_embeddings
+            token_type_ids=None,  # Not needed here as types are in final_embeddings
             output_hidden_states=True,
-            return_dict=True # Recommended
+            return_dict=True,  # Recommended
         )
 
-        sequence_output = self.drop(outputs.hidden_states[-1]) # Hidden states of the last layer
+        sequence_output = self.drop(
+            outputs.hidden_states[-1]
+        )  # Hidden states of the last layer
 
-        sequence_logits = self.sequence_classifier(sequence_output[:,0,:]) # (batch_size, num_sequence_labels)
+        sequence_logits = self.sequence_classifier(
+            sequence_output[:, 0, :]
+        )  # (batch_size, num_sequence_labels)
         token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
         # --- Calculate Losses ---
-        loss = torch.tensor(0., device=sequence_output.device)
+        loss = torch.tensor(0.0, device=sequence_output.device)
         mlm_loss = None
         sequence_loss = None
         mlm_logits = None
@@ -257,7 +284,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             loss += mlm_loss
         if token_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
-            valid_mask = (token_labels != -100)
+            valid_mask = token_labels != -100
 
             # Apply the mask
             token_labels = token_labels[valid_mask].float()  # match logits' shape
@@ -267,10 +294,12 @@ class CustomMultiTaskModel(PreTrainedModel):
             loss_fct = nn.BCEWithLogitsLoss()
             token_loss = loss_fct(masked_token_logits, token_labels)
             # uniform_loss = masked_token_logits.sum() / token_labels.sum()
-            loss += token_loss #+ uniform_loss
+            loss += token_loss  # + uniform_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
-            sequence_loss = loss_fct(sequence_logits.view(-1, self.num_labels), labels.view(-1))
+            sequence_loss = loss_fct(
+                sequence_logits.view(-1, self.num_labels), labels.view(-1)
+            )
             loss += sequence_loss
 
         if not return_dict:
@@ -289,32 +318,33 @@ class CustomMultiTaskModel(PreTrainedModel):
             attentions=outputs.attentions,
         )
 
+
 def compute_metrics(pred):
     """Compute metrics for both sequence and token classification."""
     # Unpack predictions and labels
-    seq_preds = pred.predictions['sequence']
-    seq_labels = pred.label_ids['sequence']
+    seq_preds = pred.predictions["sequence"]
+    seq_labels = pred.label_ids["sequence"]
 
-    token_preds = pred.predictions.get('token')
-    token_labels = pred.label_ids.get('token')
+    token_preds = pred.predictions.get("token")
+    token_labels = pred.label_ids.get("token")
 
     # Sequence Classification (e.g., sentiment classification)
     seq_preds_argmax = seq_preds.argmax(-1)
     seq_precision, seq_recall, seq_f1, _ = precision_recall_fscore_support(
-        seq_labels, seq_preds_argmax, average='weighted'
+        seq_labels, seq_preds_argmax, average="weighted"
     )
     seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
 
     metrics = {
         # Sequence classification
-        'seq_accuracy': seq_acc,
-        'seq_f1': seq_f1,
-        'seq_precision': seq_precision,
-        'seq_recall': seq_recall,
+        "seq_accuracy": seq_acc,
+        "seq_f1": seq_f1,
+        "seq_precision": seq_precision,
+        "seq_recall": seq_recall,
     }
     # Token Classification (e.g., NER)
     if token_labels is not None:
-        token_preds_argmax = token_preds > .5
+        token_preds_argmax = token_preds > 0.5
 
         # Flatten inputs, ignore special tokens (commonly labeled -100)
         true_token_labels = token_labels.flatten()
@@ -325,18 +355,21 @@ def compute_metrics(pred):
         pred_token_labels = pred_token_labels[mask]
 
         token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
-            true_token_labels, pred_token_labels, average='weighted'
+            true_token_labels, pred_token_labels, average="weighted"
         )
         token_acc = accuracy_score(true_token_labels, pred_token_labels)
 
         # Token classification
-        metrics.update({
-            'token_accuracy': token_acc,
-            'token_f1': token_f1,
-            'token_precision': token_precision,
-            'token_recall': token_recall
-        })
+        metrics.update(
+            {
+                "token_accuracy": token_acc,
+                "token_f1": token_f1,
+                "token_precision": token_precision,
+                "token_recall": token_recall,
+            }
+        )
     return metrics
+
 
 class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
@@ -359,18 +392,57 @@ class MultiTaskTrainer(Trainer):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train a MLM model for difference classification')
-    parser.add_argument('--model', type=str, default='FacebookAI/roberta-base', help='Pre-trained model to use')
-    parser.add_argument('--dataset', type=str, default='wic', help='Path to the dataset file')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
-    parser.add_argument('--mark_target', action='store_true', default=False, help='Mark the target word in the sentences')
-    parser.add_argument('--supersense', action='store_true', default=False, help='Use supersense classification')
-    parser.add_argument('--output_dir', type=str, default='output/bert-classifier', help='Directory to save the model')
-    parser.add_argument('--wandb_project', type=str, default='semantic-difference', help='Weights & Biases project name')
-    parser.add_argument('--wandb_run_name', type=str, default=None, help='Weights & Biases run name')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
-    parser.add_argument('--fp16', action='store_true', default=True, help='Use FP16 precision')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser = argparse.ArgumentParser(
+        description="Train a MLM model for difference classification"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="FacebookAI/roberta-base",
+        help="Pre-trained model to use",
+    )
+    parser.add_argument(
+        "--dataset", type=str, default="wic", help="Path to the dataset file"
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=10, help="Number of epochs to train"
+    )
+    parser.add_argument(
+        "--mark_target",
+        action="store_true",
+        default=False,
+        help="Mark the target word in the sentences",
+    )
+    parser.add_argument(
+        "--supersense",
+        action="store_true",
+        default=False,
+        help="Use supersense classification",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="output/bert-classifier",
+        help="Directory to save the model",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="semantic-difference",
+        help="Weights & Biases project name",
+    )
+    parser.add_argument(
+        "--wandb_run_name", type=str, default=None, help="Weights & Biases run name"
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=32, help="Batch size for training"
+    )
+    parser.add_argument(
+        "--fp16", action="store_true", default=True, help="Use FP16 precision"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
 
     args = parser.parse_args()
 
@@ -381,23 +453,18 @@ def main():
     if args.wandb_run_name is None:
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier{'-supersense' if args.supersense else ''}"
 
-    wandb.init(
-        project=args.wandb_project,
-        name=args.wandb_run_name,
-        config=vars(args)
-    )
+    wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
     test_dataset = load_data("wic", split="test", mark_target=args.mark_target)
 
-    datasets = DatasetDict({
-        "train": train_dataset,
-        "test": test_dataset
-    })
+    datasets = DatasetDict({"train": train_dataset, "test": test_dataset})
 
     # Initialize tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model, add_prefix_space=args.supersense)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model, add_prefix_space=args.supersense
+    )
 
     datasets = datasets.map(
         preprocess_function,
@@ -409,7 +476,7 @@ def main():
         align,
         fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
         batched=True,
-        remove_columns=datasets['train'].column_names,
+        remove_columns=datasets["train"].column_names,
         # num_proc=4,
     )
 
@@ -418,7 +485,7 @@ def main():
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.pad_sense_id = PAD_SENSE_ID
     config.mask_token_id = tokenizer.mask_token_id
-    config.classifier_dropout = .1
+    config.classifier_dropout = 0.1
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
@@ -442,7 +509,7 @@ def main():
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
         report_to="wandb",
-        run_name=args.wandb_run_name
+        run_name=args.wandb_run_name,
     )
 
     # Initialize trainer
