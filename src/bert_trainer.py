@@ -23,7 +23,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
 from transformers.modeling_outputs import ModelOutput
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Int
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -71,12 +71,12 @@ def get_word_supersenses(word):
     return set(synset.lexname() for synset in synsets)
 
 
-def encode_supersenses(tokens):
+def encode_supersenses(tokens) -> Tuple[List[Int], List[Int]]:
     ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
     return [
         [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
         for word in tokens
-    ]
+    ], ids
 
 
 def load_data(datasets, split="train", mark_target=False):
@@ -138,11 +138,13 @@ def tokenize_and_align_labels(examples, tokenizer):
         return_tensors="pt",
     )
     mask = [-100] * NUM_SUPERSENSE_CLASSES
+    mask_sense = [0] * NUM_SUPERSENSE_CLASSES
     labels = []
+    senses = []
     for i, offsets in enumerate(tokenized_inputs["offset_mapping"]):
         text = examples["sentences"][i]
         words = word_tokenize(text)
-        word_labels = encode_supersenses(words)
+        word_labels, word_sense_ids = encode_supersenses(words)
         pointer = 0
 
         # Create a char-to-word index
@@ -153,19 +155,31 @@ def tokenize_and_align_labels(examples, tokenizer):
             pointer += len(word) + 1  # account for space
 
         label_ids = []
+        sense_ids = []
         for offset in offsets:
             start, end = offset.tolist()
             if start == end:
                 label_ids.append(mask)
+                sense_ids.append(mask_sense)
             elif start in char_to_word:
                 word_idx = char_to_word[start]
                 label_ids.append(word_labels[word_idx])
+                sense_ids.append(
+                    [
+                        idx + 1
+                        for idx, value in enumerate(word_labels[word_idx])
+                        if value
+                    ]
+                )
             else:
                 label_ids.append(mask)
+                sense_ids.append(mask_sense)
 
         labels.append(label_ids)
+        senses.append(sense_ids)
 
     tokenized_inputs["token_labels"] = torch.tensor(labels)
+    # tokenized_inputs["sense_ids"] = torch.tensor(senses)
     return tokenized_inputs
 
 
@@ -293,7 +307,9 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_loss = loss_fct(masked_token_logits, token_labels)
             loss += token_loss  # + uniform_loss
             if self.config.uniform_token_loss:
-                uniform_loss = masked_token_logits.sum() / token_labels.sum()
+                uniform_loss = (
+                    masked_token_logits.softmax(dim=-1).sum() / token_labels.sum()
+                )
                 loss += uniform_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
