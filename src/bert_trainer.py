@@ -3,7 +3,6 @@
 import argparse
 import torch
 import torch.nn as nn
-import numpy as np
 from nltk.corpus import wordnet
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -404,7 +403,7 @@ class MultiTaskTrainer(Trainer):
             "sequence": outputs.sequence_logits,
         }
         if "token_logits" in outputs:
-            logits["token"] = 1 / (1 + np.exp(-outputs["token_logits"]))
+            logits["token"] = outputs["token_logits"].sigmoid()
 
         return None, logits, labels
 
