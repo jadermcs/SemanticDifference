@@ -3,6 +3,7 @@
 import argparse
 import torch
 import torch.nn as nn
+import numpy as np
 from nltk.corpus import wordnet
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -23,7 +24,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
 from transformers.modeling_outputs import ModelOutput
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Int
+from typing import Optional, Tuple
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,7 +39,7 @@ START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0  # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
-EVAL_STEPS = 500
+EVAL_STEPS = 1
 
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -71,7 +72,7 @@ def get_word_supersenses(word):
     return set(synset.lexname() for synset in synsets)
 
 
-def encode_supersenses(tokens) -> Tuple[List[Int], List[Int]]:
+def encode_supersenses(tokens) -> Tuple[list[int], list[int]]:
     ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
     return [
         [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
@@ -166,9 +167,8 @@ def tokenize_and_align_labels(examples, tokenizer):
                 label_ids.append(word_labels[word_idx])
                 sense_ids.append(
                     [
-                        idx + 1
+                        idx + 1 if value else 0
                         for idx, value in enumerate(word_labels[word_idx])
-                        if value
                     ]
                 )
             else:
@@ -179,7 +179,7 @@ def tokenize_and_align_labels(examples, tokenizer):
         senses.append(sense_ids)
 
     tokenized_inputs["token_labels"] = torch.tensor(labels)
-    # tokenized_inputs["sense_ids"] = torch.tensor(senses)
+    tokenized_inputs["sense_ids"] = torch.tensor(senses)
     return tokenized_inputs
 
 
@@ -194,6 +194,7 @@ def align(examples, tokenizer, supersense=False):
     tokens = tokenize_and_align_labels(examples, tokenizer)
     if not supersense:
         del tokens["token_labels"]
+        del tokens["sense_ids"]
     tokens["labels"] = examples["labels"]
     return tokens
 
@@ -221,7 +222,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         )  # Or your specific base model
         if config.num_token_labels > 0:
             self.sense_embeddings = nn.Embedding(
-                config.num_token_labels,
+                config.num_token_labels + 1,
                 config.hidden_size,
                 padding_idx=config.pad_sense_id,
             )
@@ -260,7 +261,7 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         # 2. Get sense embeddings
         if sense_ids is not None:
-            sense_embeds = self.sense_embeddings(sense_ids)
+            sense_embeds = self.sense_embeddings(sense_ids).sum(dim=-2)
             word_embeds = word_embeds + sense_embeds
 
         final_embeddings = embed.drop(embed.norm(word_embeds))
@@ -403,7 +404,8 @@ class MultiTaskTrainer(Trainer):
             "sequence": outputs.sequence_logits,
         }
         if "token_logits" in outputs:
-            logits["token"] = outputs["token_logits"]
+            logits["token"] = 1 / (1 + np.exp(-outputs["token_logits"]))
+
         return None, logits, labels
 
 
