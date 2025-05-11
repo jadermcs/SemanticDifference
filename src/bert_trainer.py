@@ -178,7 +178,7 @@ def tokenize_and_align_labels(examples, tokenizer):
         senses.append(sense_ids)
 
     tokenized_inputs["token_labels"] = torch.tensor(labels)
-    tokenized_inputs["sense_ids"] = torch.tensor(senses)
+    # tokenized_inputs["sense_ids"] = torch.tensor(senses)
     return tokenized_inputs
 
 
