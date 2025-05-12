@@ -200,9 +200,10 @@ def align(examples, tokenizer, supersense=False):
 
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
-    return {
-        "sentences": f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}",
-    }
+    examples["sentences"] = (
+        f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}"
+    )
+    return examples
 
 
 @dataclass
@@ -227,10 +228,8 @@ class CustomMultiTaskModel(PreTrainedModel):
             config._name_or_path, config=config
         )  # Or your specific base model
         if config.num_token_labels > 0:
-            self.sense_embeddings = torch.randn(
-                (config.num_token_labels, config.hidden_size),
-                requires_grad=True,
-                device=self.model.device,
+            self.sense_embeddings = nn.Parameter(
+                torch.randn(config.num_token_labels, config.hidden_size)
             )
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings)
