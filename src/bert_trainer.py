@@ -545,6 +545,7 @@ def main():
         label_names=["labels"],
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
+        gradient_accumulation_steps=args.batch_size//32,
         report_to="wandb",
         run_name=args.wandb_run_name,
     )
