@@ -19,7 +19,7 @@ from transformers import (
     set_seed,
 )
 
-# import wandb
+import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
 from transformers.modeling_outputs import ModelOutput
@@ -477,7 +477,7 @@ def main():
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
         args.wandb_run_name += "-supersense" if args.supersense else ""
 
-    # wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
+    wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
@@ -530,7 +530,7 @@ def main():
         label_names=["labels"],
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
-        # report_to="wandb",
+        report_to="wandb",
         run_name=args.wandb_run_name,
     )
 
@@ -550,14 +550,14 @@ def main():
     metrics = trainer.evaluate()
 
     # Log final metrics to wandb
-    # wandb.log(metrics)
+    wandb.log(metrics)
 
     # Save the model
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
     # Finish wandb run
-    # wandb.finish()
+    wandb.finish()
 
 
 if __name__ == "__main__":
