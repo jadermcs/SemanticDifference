@@ -156,7 +156,7 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     return inputs, labels
 
 
-def align(examples, tokenizer, supersense=False):
+def align(examples, tokenizer, supersense=False, mode="train"):
     inputs = tokenizer(
         examples["sentences"],
         truncation=True,
@@ -165,7 +165,7 @@ def align(examples, tokenizer, supersense=False):
         padding="max_length",
         return_tensors="pt",
     )
-    if supersense:
+    if supersense and mode == "train":
         mask = [0] * NUM_SUPERSENSE_CLASSES
         labels = []
         for i, offsets in enumerate(inputs["offset_mapping"]):
@@ -192,9 +192,10 @@ def align(examples, tokenizer, supersense=False):
             labels.append(label_ids)
         inputs["token_labels"] = torch.tensor(labels)
     inputs["labels"] = examples["labels"]
-    inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(
-        inputs["input_ids"], tokenizer
-    )
+    if mode == "train":
+        inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(
+            inputs["input_ids"], tokenizer
+        )
     return inputs
 
 
@@ -357,6 +358,8 @@ def compute_metrics(pred):
     seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
 
     metrics = {
+        # Get loss
+        "loss": pred.predictions.get("loss"),
         # Sequence classification
         "seq_accuracy": seq_acc,
         "seq_f1": seq_f1,
@@ -395,22 +398,23 @@ def compute_metrics(pred):
 class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
-        labels = {
+        label_ids = {
             "sequence": inputs.get("labels"),
         }
         if "token_labels" in inputs:
-            labels["token"] = inputs["token_labels"]
+            label_ids["token"] = inputs["token_labels"]
 
         with torch.no_grad():
             outputs = model(**inputs, return_dict=True)
 
-        logits = {
+        predictions = {
+            "loss": outputs.loss,
             "sequence": outputs.sequence_logits,
         }
         if "token_logits" in outputs:
-            logits["token"] = outputs["token_logits"].sigmoid()
+            predictions["token"] = outputs["token_logits"].sigmoid()
 
-        return None, logits, labels
+        return None, predictions, label_ids
 
 
 def main():
@@ -495,9 +499,21 @@ def main():
         num_proc=4,
     )
 
-    datasets = datasets.map(
+    datasets["train"] = datasets["train"].map(
         align,
         fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
+        batched=True,
+        remove_columns=datasets["train"].column_names,
+        num_proc=4,
+    )
+
+    datasets["test"] = datasets["test"].map(
+        align,
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "supersense": args.supersense,
+            "mode": "test",
+        },
         batched=True,
         remove_columns=datasets["train"].column_names,
         num_proc=4,
