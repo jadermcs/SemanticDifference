@@ -408,7 +408,6 @@ class MultiTaskTrainer(Trainer):
             outputs = model(**inputs, return_dict=True)
 
         predictions = {
-            "loss": outputs.loss,
             "sequence": outputs.sequence_logits,
         }
         if "token_logits" in outputs:
