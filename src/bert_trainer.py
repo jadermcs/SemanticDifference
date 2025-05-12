@@ -18,7 +18,7 @@ from transformers import (
     PreTrainedModel,
     set_seed,
 )
-import wandb
+# import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
 from transformers.modeling_outputs import ModelOutput
@@ -36,7 +36,6 @@ LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 START_TARGET_TOKEN = "[TGT]"
 END_TARGET_TOKEN = "[/TGT]"
-PAD_SENSE_ID = 0  # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
 EVAL_STEPS = 500
 
@@ -76,7 +75,7 @@ def encode_supersenses(tokens) -> Tuple[list[int], list[int]]:
     return [
         [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
         for word in tokens
-    ], ids
+    ]
 
 
 def load_data(datasets, split="train", mark_target=False):
@@ -111,25 +110,49 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     """
     Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
     """
+    mask_replace_prob = 0.8
+    random_replace_prob = 0.1
     # We sample a few tokens in each sequence for MLM training (with probability self.mlm_probability)
-    probability_matrix = torch.full(inputs.shape, mlm_probability)
-    special_tokens_mask = tokenizer.get_special_tokens_mask(
-        inputs, already_has_special_tokens=True
-    )
+    labels = inputs.clone()
+    # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
+    probability_matrix = torch.full(labels.shape, mlm_probability)
+    special_tokens_mask = [
+        tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
+    ]
     special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
 
     probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
     masked_indices = torch.bernoulli(probability_matrix).bool()
+    labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
-    # we replace masked input tokens with tokenizer.mask_token ([MASK])
-    inputs[masked_indices] = tokenizer.mask_token_id
+    # mask_replace_prob% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+    indices_replaced = torch.bernoulli(torch.full(labels.shape, mask_replace_prob)).bool() & masked_indices
+    inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
 
-    # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-    return inputs, masked_indices
+    if mask_replace_prob == 1 or random_replace_prob == 0:
+        return inputs, labels
+
+    remaining_prob = 1 - mask_replace_prob
+    # scaling the random_replace_prob to the remaining probability for example if
+    # mask_replace_prob = 0.8 and random_replace_prob = 0.1,
+    # then random_replace_prob_scaled = 0.1 / 0.2 = 0.5
+    random_replace_prob_scaled = random_replace_prob / remaining_prob
+
+    # random_replace_prob% of the time, we replace masked input tokens with random word
+    indices_random = (
+        torch.bernoulli(torch.full(labels.shape, random_replace_prob_scaled)).bool()
+        & masked_indices
+        & ~indices_replaced
+    )
+    random_words = torch.randint(len(tokenizer), labels.shape, dtype=torch.long)
+    inputs[indices_random] = random_words[indices_random]
+
+    # The rest of the time ((1-random_replace_prob-mask_replace_prob)% of the time) we keep the masked input tokens unchanged
+    return inputs, labels
 
 
-def tokenize_and_align_labels(examples, tokenizer):
-    tokenized_inputs = tokenizer(
+def align(examples, tokenizer, supersense=False):
+    inputs = tokenizer(
         examples["sentences"],
         truncation=True,
         return_offsets_mapping=True,
@@ -137,49 +160,35 @@ def tokenize_and_align_labels(examples, tokenizer):
         padding="max_length",
         return_tensors="pt",
     )
-    mask = [-100] * NUM_SUPERSENSE_CLASSES
-    mask_sense = [0] * NUM_SUPERSENSE_CLASSES
-    labels = []
-    senses = []
-    for i, offsets in enumerate(tokenized_inputs["offset_mapping"]):
-        text = examples["sentences"][i]
-        words = word_tokenize(text)
-        word_labels, word_sense_ids = encode_supersenses(words)
-        pointer = 0
-
-        # Create a char-to-word index
-        char_to_word = {}
-        for word_idx, word in enumerate(words):
-            for c in range(pointer, pointer + len(word)):
-                char_to_word[c] = word_idx
-            pointer += len(word) + 1  # account for space
-
-        label_ids = []
-        sense_ids = []
-        for offset in offsets:
-            start, end = offset.tolist()
-            if start == end:
-                label_ids.append(mask)
-                sense_ids.append(mask_sense)
-            elif start in char_to_word:
-                word_idx = char_to_word[start]
-                label_ids.append(word_labels[word_idx])
-                sense_ids.append(
-                    [
-                        idx + 1 if value else 0
-                        for idx, value in enumerate(word_labels[word_idx])
-                    ]
-                )
-            else:
-                label_ids.append(mask)
-                sense_ids.append(mask_sense)
-
-        labels.append(label_ids)
-        senses.append(sense_ids)
-
-    tokenized_inputs["token_labels"] = torch.tensor(labels)
-    # tokenized_inputs["sense_ids"] = torch.tensor(senses)
-    return tokenized_inputs
+    if supersense:
+        mask = [0] * NUM_SUPERSENSE_CLASSES
+        labels = []
+        for i, offsets in enumerate(inputs["offset_mapping"]):
+            text = examples["sentences"][i]
+            words = word_tokenize(text)
+            word_labels = encode_supersenses(words)
+            pointer = 0
+            # Create a char-to-word index
+            char_to_word = {}
+            for word_idx, word in enumerate(words):
+                for c in range(pointer, pointer + len(word)):
+                    char_to_word[c] = word_idx
+                pointer += len(word) + 1  # account for space
+            label_ids = []
+            for offset in offsets:
+                start, end = offset.tolist()
+                if start == end:
+                    label_ids.append(mask)
+                elif start in char_to_word:
+                    word_idx = char_to_word[start]
+                    label_ids.append(word_labels[word_idx])
+                else:
+                    label_ids.append(mask)
+            labels.append(label_ids)
+        inputs["token_labels"] = torch.tensor(labels)
+    inputs["labels"] = examples["labels"]
+    inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(inputs["input_ids"], tokenizer)
+    return inputs
 
 
 def preprocess_function(examples, tokenizer):
@@ -187,15 +196,6 @@ def preprocess_function(examples, tokenizer):
     return {
         "sentences": f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}",
     }
-
-
-def align(examples, tokenizer, supersense=False):
-    tokens = tokenize_and_align_labels(examples, tokenizer)
-    if not supersense:
-        del tokens["token_labels"]
-        del tokens["sense_ids"]
-    tokens["labels"] = examples["labels"]
-    return tokens
 
 
 @dataclass
@@ -220,13 +220,12 @@ class CustomMultiTaskModel(PreTrainedModel):
             config._name_or_path, config=config
         )  # Or your specific base model
         if config.num_token_labels > 0:
-            self.sense_embeddings = nn.Embedding(
-                config.num_token_labels + 1,
-                config.hidden_size,
-                padding_idx=config.pad_sense_id,
+            self.sense_embeddings = torch.randn(
+                (config.num_token_labels, config.hidden_size),
+                requires_grad=True
             )
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
-            nn.init.xavier_uniform_(self.sense_embeddings.weight)
+            nn.init.xavier_uniform_(self.sense_embeddings)
         #
         # Example: Add a classification head
         self.drop = nn.Dropout(config.classifier_dropout)
@@ -236,12 +235,13 @@ class CustomMultiTaskModel(PreTrainedModel):
         self.token_classifier = nn.Linear(
             config.hidden_size, config.num_token_labels
         )  # Token classification
+        self.loss_seq = nn.CrossEntropyLoss()
+        self.loss_tok = nn.BCEWithLogitsLoss()
         self.post_init()
 
     def forward(
         self,
         input_ids,
-        sense_ids=None,
         attention_mask=None,
         token_type_ids=None,
         position_ids=None,
@@ -259,9 +259,12 @@ class CustomMultiTaskModel(PreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        if sense_ids is not None:
-            sense_embeds = self.sense_embeddings(sense_ids).sum(dim=-2)
-            word_embeds = word_embeds + sense_embeds
+        if token_labels is not None and mlm_labels is not None:
+            mask = mlm_labels != -100
+            mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
+            masked_labels = token_labels * mask
+            sense_embeds = masked_labels.float() @ self.sense_embeddings
+            word_embeds += sense_embeds
 
         final_embeddings = embed.drop(embed.norm(word_embeds))
 
@@ -296,15 +299,13 @@ class CustomMultiTaskModel(PreTrainedModel):
             loss += mlm_loss
         if token_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
-            valid_mask = token_labels != -100
-
+            mask = mlm_labels == -100
+            mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
             # Apply the mask
-            token_labels = token_labels[valid_mask].float()  # match logits' shape
-            masked_token_logits = token_logits[valid_mask]
-
+            token_labels = token_labels[mask].float()  # match logits' shape
+            masked_token_logits = token_logits[mask]
             # Compute loss
-            loss_fct = nn.BCEWithLogitsLoss()
-            token_loss = loss_fct(masked_token_logits, token_labels)
+            token_loss = self.loss_tok(masked_token_logits, token_labels)
             loss += token_loss  # + uniform_loss
             if self.config.uniform_token_loss:
                 uniform_loss = (
@@ -312,8 +313,7 @@ class CustomMultiTaskModel(PreTrainedModel):
                 )
                 loss += uniform_loss
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            sequence_loss = loss_fct(
+            sequence_loss = self.loss_seq(
                 sequence_logits.view(-1, self.num_labels), labels.view(-1)
             )
             loss += sequence_loss
@@ -478,7 +478,7 @@ def main():
         args.wandb_run_name += "-supersense" if args.supersense else ""
         args.wandb_run_name += "-uniform" if args.uniform else ""
 
-    wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
+    # wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
     # Load dataset
     train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
@@ -508,8 +508,6 @@ def main():
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
-    config.pad_sense_id = PAD_SENSE_ID
-    config.mask_token_id = tokenizer.mask_token_id
     config.classifier_dropout = 0.1
     config.uniform_token_loss = args.uniform
     model = CustomMultiTaskModel(config)
@@ -534,7 +532,7 @@ def main():
         label_names=["labels"],
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
-        report_to="wandb",
+        # report_to="wandb",
         run_name=args.wandb_run_name,
     )
 
@@ -554,14 +552,14 @@ def main():
     metrics = trainer.evaluate()
 
     # Log final metrics to wandb
-    wandb.log(metrics)
+    # wandb.log(metrics)
 
     # Save the model
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
     # Finish wandb run
-    wandb.finish()
+    # wandb.finish()
 
 
 if __name__ == "__main__":
