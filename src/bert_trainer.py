@@ -191,8 +191,8 @@ def align(examples, tokenizer, supersense=False, mode="train"):
                     label_ids.append(mask)
             labels.append(label_ids)
         inputs["token_labels"] = torch.tensor(labels)
-    inputs["labels"] = examples["labels"]
     if mode == "train":
+        inputs["labels"] = examples["labels"]
         inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(
             inputs["input_ids"], tokenizer
         )
