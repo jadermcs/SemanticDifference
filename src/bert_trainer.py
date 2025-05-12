@@ -515,7 +515,7 @@ def main():
             "mode": "test",
         },
         batched=True,
-        remove_columns=datasets["train"].column_names,
+        remove_columns=datasets["test"].column_names,
         num_proc=4,
     )
 
