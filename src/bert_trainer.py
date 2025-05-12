@@ -305,7 +305,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         if mlm_labels is not None:
             mlm_loss = outputs.loss
             loss += mlm_loss
-        if token_labels is not None:
+        if token_labels is not None and mlm_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             mask = mlm_labels == -100
             mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
