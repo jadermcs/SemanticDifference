@@ -359,7 +359,7 @@ def compute_metrics(pred):
 
     metrics = {
         # Get loss
-        "loss": pred.predictions.get("loss"),
+        "loss": pred.predictions.get("loss").mean(),
         # Sequence classification
         "seq_accuracy": seq_acc,
         "seq_f1": seq_f1,
