@@ -165,7 +165,7 @@ def align(examples, tokenizer, supersense=False, mode="train"):
         padding="max_length",
         return_tensors="pt",
     )
-    if supersense and mode == "train":
+    if supersense:
         mask = [0] * NUM_SUPERSENSE_CLASSES
         labels = []
         for i, offsets in enumerate(inputs["offset_mapping"]):
@@ -294,12 +294,12 @@ class CustomMultiTaskModel(PreTrainedModel):
             sequence_output[:, 0, :]
         )  # (batch_size, num_sequence_labels)
         token_logits = self.token_classifier(sequence_output)  # (B, L, C)
+        mlm_logits = outputs.logits
 
         # --- Calculate Losses ---
         loss = torch.tensor(0.0, device=sequence_output.device)
         mlm_loss = None
         sequence_loss = None
-        mlm_logits = None
         token_loss = None
 
         if mlm_labels is not None:
@@ -461,7 +461,7 @@ def main():
         "--wandb_run_name", type=str, default=None, help="Weights & Biases run name"
     )
     parser.add_argument(
-        "--batch_size", type=int, default=32, help="Batch size for training"
+        "--batch_size", type=int, default=16, help="Batch size for training"
     )
     parser.add_argument(
         "--fp16", action="store_true", default=True, help="Use FP16 precision"
@@ -506,7 +506,7 @@ def main():
         remove_columns=datasets["train"].column_names,
         num_proc=4,
     )
-
+    # During test we show all the tokens however we don't give supersense embeddings
     datasets["test"] = datasets["test"].map(
         align,
         fn_kwargs={
