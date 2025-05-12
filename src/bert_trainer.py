@@ -191,8 +191,8 @@ def align(examples, tokenizer, supersense=False, mode="train"):
                     label_ids.append(mask)
             labels.append(label_ids)
         inputs["token_labels"] = torch.tensor(labels)
+    inputs["labels"] = examples["labels"]
     if mode == "train":
-        inputs["labels"] = examples["labels"]
         inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(
             inputs["input_ids"], tokenizer
         )
@@ -305,7 +305,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         if mlm_labels is not None:
             mlm_loss = outputs.loss
             loss += mlm_loss
-        if token_labels is not None and mlm_labels is not None:
+        if token_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             mask = mlm_labels == -100
             mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
@@ -408,6 +408,7 @@ class MultiTaskTrainer(Trainer):
             outputs = model(**inputs, return_dict=True)
 
         predictions = {
+            "loss": outputs.loss,
             "sequence": outputs.sequence_logits,
         }
         if "token_logits" in outputs:
