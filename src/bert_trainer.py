@@ -18,6 +18,7 @@ from transformers import (
     PreTrainedModel,
     set_seed,
 )
+
 # import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
@@ -117,7 +118,8 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
     probability_matrix = torch.full(labels.shape, mlm_probability)
     special_tokens_mask = [
-        tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
+        tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
+        for val in labels.tolist()
     ]
     special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
 
@@ -126,7 +128,10 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
     # mask_replace_prob% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-    indices_replaced = torch.bernoulli(torch.full(labels.shape, mask_replace_prob)).bool() & masked_indices
+    indices_replaced = (
+        torch.bernoulli(torch.full(labels.shape, mask_replace_prob)).bool()
+        & masked_indices
+    )
     inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
 
     if mask_replace_prob == 1 or random_replace_prob == 0:
@@ -187,7 +192,9 @@ def align(examples, tokenizer, supersense=False):
             labels.append(label_ids)
         inputs["token_labels"] = torch.tensor(labels)
     inputs["labels"] = examples["labels"]
-    inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(inputs["input_ids"], tokenizer)
+    inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(
+        inputs["input_ids"], tokenizer
+    )
     return inputs
 
 
@@ -222,7 +229,8 @@ class CustomMultiTaskModel(PreTrainedModel):
         if config.num_token_labels > 0:
             self.sense_embeddings = torch.randn(
                 (config.num_token_labels, config.hidden_size),
-                requires_grad=True
+                requires_grad=True,
+                device=self.model.device,
             )
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings)
@@ -306,12 +314,10 @@ class CustomMultiTaskModel(PreTrainedModel):
             masked_token_logits = token_logits[mask]
             # Compute loss
             token_loss = self.loss_tok(masked_token_logits, token_labels)
-            loss += token_loss  # + uniform_loss
-            if self.config.uniform_token_loss:
-                uniform_loss = (
-                    masked_token_logits.softmax(dim=-1).sum() / token_labels.sum()
-                )
-                loss += uniform_loss
+            uniform_loss = (
+                masked_token_logits.softmax(dim=-1).sum() / token_labels.sum()
+            )
+            loss += token_loss + uniform_loss
         if labels is not None:
             sequence_loss = self.loss_seq(
                 sequence_logits.view(-1, self.num_labels), labels.view(-1)
@@ -437,12 +443,6 @@ def main():
         help="Use supersense classification",
     )
     parser.add_argument(
-        "--uniform",
-        action="store_true",
-        default=False,
-        help="Use uniform regularization for supersense.",
-    )
-    parser.add_argument(
         "--output_dir",
         type=str,
         default="output/bert-classifier",
@@ -476,7 +476,6 @@ def main():
     if args.wandb_run_name is None:
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
         args.wandb_run_name += "-supersense" if args.supersense else ""
-        args.wandb_run_name += "-uniform" if args.uniform else ""
 
     # wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
@@ -509,7 +508,6 @@ def main():
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.classifier_dropout = 0.1
-    config.uniform_token_loss = args.uniform
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
     if args.mark_target:
