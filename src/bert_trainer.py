@@ -190,6 +190,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         self.num_labels = config.num_labels
         self.model = ModernBertModel(config)  # Or your specific base model
         self.head = ModernBertPredictionHead(config)
+        self.head_mlm = ModernBertPredictionHead(config)
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
         if config.num_token_labels > 0:
             self.sense_embeddings = nn.Parameter(
@@ -207,8 +208,8 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         self.post_init()
 
     @torch.compile(dynamic=False)
-    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
-        return self.head(output)
+    def compiled_decoder(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head_mlm(output))
 
     def forward(
         self,
@@ -244,9 +245,9 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             return_dict=return_dict,
         )
         last_hidden_state = outputs[0]
+        mlm_logits = self.compiled_decoder(last_hidden_state)
 
-        last_hidden_state = self.compiled_head(last_hidden_state)
-        last_hidden_state = self.drop(last_hidden_state)
+        last_hidden_state = self.drop(self.head(last_hidden_state))
 
         if self.config.classifier_pooling == "cls":
             pooled_output = last_hidden_state[:, 0]
@@ -257,7 +258,6 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
 
         sequence_logits = self.sequence_classifier(pooled_output)
         token_logits = self.token_classifier(last_hidden_state)
-        mlm_logits = self.decoder(last_hidden_state)
 
         # --- Calculate Losses ---
         loss = torch.tensor(0.0, device=last_hidden_state.device)
