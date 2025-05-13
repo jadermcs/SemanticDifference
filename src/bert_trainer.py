@@ -372,9 +372,8 @@ class MultiTaskTrainer(Trainer):
         predictions = {
             "loss": outputs.loss,
             "sequence": outputs.sequence_logits,
+            "token": outputs["token_logits"].sigmoid()
         }
-        if "token_logits" in outputs:
-            predictions["token"] = outputs["token_logits"].sigmoid()
 
         return None, predictions, label_ids
 
