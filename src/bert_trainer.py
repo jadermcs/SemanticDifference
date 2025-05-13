@@ -206,7 +206,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
 
         self.post_init()
 
-    @torch.compile(dynamic=True)
+    @torch.compile(dynamic=False)
     def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
         return self.head(output)
 
@@ -225,11 +225,6 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         return_dict=None,
         num_items_in_batch=None,
     ):
-        if self.config._attn_implementation == "flash_attention_2":
-            with torch.no_grad():
-                input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_modernbert_input(
-                    inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=mlm_labels
-                )
         # 1. Get standard word embeddings
         embed = self.model.embeddings
         word_embeds = embed.tok_embeddings(input_ids)
@@ -242,11 +237,15 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             sense_embeds = masked_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
 
-        final_embeddings = embed.drop(embed.norm(word_embeds))
+        inputs_embeds = embed.drop(embed.norm(word_embeds))
+        if self.config._attn_implementation == "flash_attention_2":
+            with torch.no_grad():
+                inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_modernbert_input(
+                    inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=mlm_labels
+                )
 
-        attention_mask = attention_mask.squeeze(1)
         outputs = self.model(
-            inputs_embeds=final_embeddings,
+            inputs_embeds=inputs_embeds,
             # input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
