@@ -152,7 +152,7 @@ def align(examples, tokenizer, supersense=False, mode="train"):
                     label_ids.append(mask)
             labels.append(label_ids)
         inputs["token_labels"] = torch.tensor(labels)
-    inputs["labels"] = examples["labels"]
+    inputs["seq_labels"] = examples["labels"]
     if mode == "train":
         inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(
             inputs["input_ids"], tokenizer
@@ -215,7 +215,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,  # Labels for sequence classification
+        seq_labels: Optional[torch.Tensor] = None,  # Labels for sequence classification
         mlm_labels: Optional[torch.Tensor] = None,  # Labels for MLM
         token_labels: Optional[torch.Tensor] = None,  # Labels for token classification
         output_attentions: Optional[bool] = None,
@@ -227,11 +227,12 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        if token_labels is not None and mlm_labels is not None:
-            mask = mlm_labels != -100
-            mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
-            masked_labels = token_labels * mask
-            sense_embeds = masked_labels.float() @ self.sense_embeddings
+        mask = (mlm_labels == -100) if mlm_labels is not None else None
+        if token_labels is not None:
+            # Only provide embeddings for unmasked tokens
+            reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
+            masked_token_labels = token_labels * reshape_mask
+            sense_embeds = masked_token_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
 
         inputs_embeds = embed.drop(embed.norm(word_embeds))
@@ -264,7 +265,6 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         sequence_loss = None
         token_loss = None
 
-        mask = (mlm_labels == -100) if mlm_labels is not None else None
         if mlm_labels is not None:
             mlm_labels = mlm_labels[mask]
             masked_mlm_logits = mlm_logits[mask]
@@ -272,20 +272,18 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             loss += mlm_loss
         if token_labels is not None and mask is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
-            mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
+            reshape_mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
             # Apply the mask
-            token_labels = token_labels[mask].float()  # match logits' shape
-            masked_token_logits = token_logits[mask]
+            token_labels = token_labels[reshape_mask].float()  # match logits' shape
+            masked_token_logits = token_logits[reshape_mask]
             # Compute loss
             token_loss = self.loss_tok(masked_token_logits, token_labels)
             uniform_loss = (
                 masked_token_logits.softmax(dim=-1).sum() / token_labels.sum()
             )
             loss += token_loss + uniform_loss
-        if labels is not None:
-            sequence_loss = self.loss_seq(
-                sequence_logits.view(-1, self.num_labels), labels.view(-1)
-            )
+        if seq_labels is not None:
+            sequence_loss = self.loss_seq(sequence_logits.view(-1, self.num_labels), seq_labels.view(-1))
             loss += sequence_loss
 
         if not return_dict:
@@ -453,9 +451,7 @@ def main():
     datasets = DatasetDict({"train": train_dataset, "test": test_dataset})
 
     # Initialize tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model, add_prefix_space=args.supersense
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
 
     datasets = datasets.map(
         preprocess_function,
@@ -508,6 +504,8 @@ def main():
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
         gradient_accumulation_steps=32//args.batch_size,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True if device.type == "cuda" else False,
         report_to="wandb",
         run_name=args.wandb_run_name,
     )
