@@ -245,7 +245,7 @@ class CustomMultiTaskModel(PreTrainedModel):
 
     @torch.compile(dynamic=True)
     def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
-        return self.decoder(self.head(output))
+        return self.head(output)
 
     def forward(
         self,
@@ -260,6 +260,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        num_items_in_batch=None,
     ):
         # 1. Get standard word embeddings
         embed = self.model.embeddings
@@ -285,7 +286,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         )
         last_hidden_state = outputs[0]
 
-        last_hidden_state = self.head(last_hidden_state)
+        last_hidden_state = self.compiled_head(last_hidden_state)
         last_hidden_state = self.drop(last_hidden_state)
 
         if self.config.classifier_pooling == "cls":
@@ -525,15 +526,12 @@ def main():
     )
 
     # Initialize model
-    config = AutoConfig.from_pretrained(args.model, num_labels=2)
+    config = AutoConfig.from_pretrained(args.model, attn_implementation="flash_attention_2", num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.embedding_dropout = 0.1
     config.classifier_dropout = 0.1
     model = CustomMultiTaskModel(config)
-    # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
-    if args.mark_target:
-        tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
-        model.resize_token_embeddings(len(tokenizer))
+    # model = torch.compile(model, mode="max-autotune")
 
     # Define training arguments
     training_args = TrainingArguments(
