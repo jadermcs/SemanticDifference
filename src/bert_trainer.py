@@ -228,7 +228,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
 
         # 2. Get sense embeddings
         mask = (mlm_labels == -100) if mlm_labels is not None else None
-        if token_labels is not None and mask is not None:
+        if token_labels is not None and mlm_labels is not None:
             # Only provide embeddings for unmasked tokens
             reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
             masked_token_labels = token_labels * reshape_mask
@@ -270,7 +270,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             masked_mlm_logits = mlm_logits[mask]
             mlm_loss = self.loss_mlm(masked_mlm_logits.view(mlm_labels.shape[0], -1), mlm_labels.view(-1))
             loss += mlm_loss
-        if token_labels is not None and mask is not None:
+        if token_labels is not None and mlm_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             reshape_mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
             # Apply the mask
