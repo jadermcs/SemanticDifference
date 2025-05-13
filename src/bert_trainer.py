@@ -10,7 +10,7 @@ from functools import lru_cache
 import json
 from tqdm import tqdm
 from transformers import (
-    AutoModelForMaskedLM,
+    ModernBertModel,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
@@ -18,6 +18,7 @@ from transformers import (
     PreTrainedModel,
     set_seed,
 )
+from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead
 
 import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
@@ -68,10 +69,10 @@ def get_word_supersenses(word):
     # Lemmatize the word
     word = lemmatizer.lemmatize(word)
     synsets = wordnet.synsets(word)
-    return set(synset.lexname() for synset in synsets)
+    return set(synset.lexname() for synset in synsets if synset is not None)
 
 
-def encode_supersenses(tokens) -> Tuple[list[int], list[int]]:
+def encode_supersenses(tokens) -> list[list[int]]:
     ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
     return [
         [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
@@ -225,33 +226,31 @@ class CustomMultiTaskModel(PreTrainedModel):
         super().__init__(config)
         self.config = config
         self.num_labels = config.num_labels
-        self.model = AutoModelForMaskedLM.from_pretrained(
-            config._name_or_path, config=config
-        )  # Or your specific base model
+        self.model = ModernBertModel(config)  # Or your specific base model
+        self.head = ModernBertPredictionHead(config)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
         if config.num_token_labels > 0:
             self.sense_embeddings = nn.Parameter(
                 torch.randn(config.num_token_labels, config.hidden_size)
             )
-            # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings)
         #
-        # Example: Add a classification head
         self.drop = nn.Dropout(config.classifier_dropout)
-        self.sequence_classifier = nn.Linear(
-            config.hidden_size, config.num_labels
-        )  # Binary classification
-        self.token_classifier = nn.Linear(
-            config.hidden_size, config.num_token_labels
-        )  # Token classification
+        self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
         self.loss_seq = nn.CrossEntropyLoss()
         self.loss_tok = nn.BCEWithLogitsLoss()
+        self.loss_mlm = nn.CrossEntropyLoss()
         self.post_init()
+
+    @torch.compile(dynamic=True)
+    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head(output))
 
     def forward(
         self,
         input_ids,
         attention_mask=None,
-        token_type_ids=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
@@ -263,7 +262,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         return_dict=None,
     ):
         # 1. Get standard word embeddings
-        embed = self.model.model.embeddings
+        embed = self.model.embeddings
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
@@ -276,38 +275,44 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         final_embeddings = embed.drop(embed.norm(word_embeds))
 
+        attention_mask = attention_mask.squeeze(1)
         outputs = self.model(
             inputs_embeds=final_embeddings,
             # input_ids=input_ids,
-            attention_mask=attention_mask.squeeze(1),
-            labels=mlm_labels,
-            token_type_ids=None,  # Not needed here as types are in final_embeddings
+            attention_mask=attention_mask,
             output_hidden_states=True,
             return_dict=True,  # Recommended
         )
+        last_hidden_state = outputs[0]
 
-        sequence_output = self.drop(
-            outputs.hidden_states[-1]
-        )  # Hidden states of the last layer
+        last_hidden_state = self.head(last_hidden_state)
+        last_hidden_state = self.drop(last_hidden_state)
 
-        sequence_logits = self.sequence_classifier(
-            sequence_output[:, 0, :]
-        )  # (batch_size, num_sequence_labels)
-        token_logits = self.token_classifier(sequence_output)  # (B, L, C)
-        mlm_logits = outputs.logits
+        if self.config.classifier_pooling == "cls":
+            pooled_output = last_hidden_state[:, 0]
+        else:
+            pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(
+                dim=1, keepdim=True
+            )
+
+        sequence_logits = self.sequence_classifier(pooled_output)
+        token_logits = self.token_classifier(last_hidden_state)
+        mlm_logits = self.decoder(last_hidden_state)
 
         # --- Calculate Losses ---
-        loss = torch.tensor(0.0, device=sequence_output.device)
+        loss = torch.tensor(0.0, device=last_hidden_state.device)
         mlm_loss = None
         sequence_loss = None
         token_loss = None
 
+        mask = (mlm_labels == -100) if mlm_labels is not None else None
         if mlm_labels is not None:
-            mlm_loss = outputs.loss
+            mlm_labels = mlm_labels[mask]
+            masked_mlm_logits = mlm_logits[mask]
+            mlm_loss = self.loss_mlm(masked_mlm_logits.view(mlm_labels.shape[0], -1), mlm_labels.view(-1))
             loss += mlm_loss
-        if token_labels is not None and mlm_labels is not None:
+        if token_labels is not None and mask is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
-            mask = mlm_labels == -100
             mask = mask.unsqueeze(-1).expand(-1, -1, self.sense_embeddings.size(0))
             # Apply the mask
             token_labels = token_labels[mask].float()  # match logits' shape
@@ -330,12 +335,12 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         return MultiTaskModelOutput(
             loss=loss,
-            mlm_loss=mlm_loss,
-            token_loss=token_loss,
             sequence_loss=sequence_loss,
+            token_loss=token_loss,
+            mlm_loss=mlm_loss,
+            sequence_logits=sequence_logits,
             token_logits=token_logits,
             mlm_logits=mlm_logits,
-            sequence_logits=sequence_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
@@ -522,6 +527,7 @@ def main():
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
+    config.embedding_dropout = 0.1
     config.classifier_dropout = 0.1
     model = CustomMultiTaskModel(config)
     # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
