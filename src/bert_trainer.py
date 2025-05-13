@@ -3,11 +3,8 @@
 import argparse
 import torch
 import torch.nn as nn
-from nltk.corpus import wordnet
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
-from functools import lru_cache
 import json
+from wordnet_utils import encode_supersenses, word_tokenize, NUM_SUPERSENSE_CLASSES
 from tqdm import tqdm
 from transformers import (
     ModernBertModel,
@@ -15,10 +12,10 @@ from transformers import (
     TrainingArguments,
     Trainer,
     AutoConfig,
-    PreTrainedModel,
+    ModernBertPreTrainedModel,
     set_seed,
 )
-from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead
+from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead, _unpad_modernbert_input
 
 import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
@@ -41,43 +38,6 @@ END_TARGET_TOKEN = "[/TGT]"
 WEIGHT_DECAY = 0.01
 EVAL_STEPS = 500
 
-# Initialize WordNet lemmatizer
-lemmatizer = WordNetLemmatizer()
-
-
-# Get all supersense classes from WordNet
-def get_supersense_classes():
-    """Extract all supersense classes from WordNet."""
-    supersenses = set()
-    for synset in wordnet.all_synsets():
-        if hasattr(synset, "lexname"):
-            supersenses.add(synset.lexname())
-    return sorted(list(supersenses))
-
-
-SUPERSENSE_CLASSES = get_supersense_classes()
-SUPERSENSE_TO_ID = {
-    supersense: idx for idx, supersense in enumerate(SUPERSENSE_CLASSES)
-}
-NUM_SUPERSENSE_CLASSES = len(SUPERSENSE_CLASSES)
-
-
-@lru_cache(maxsize=200000)
-def get_word_supersenses(word):
-    if len(word) < 4:
-        return set()
-    # Lemmatize the word
-    word = lemmatizer.lemmatize(word)
-    synsets = wordnet.synsets(word)
-    return set(synset.lexname() for synset in synsets if synset is not None)
-
-
-def encode_supersenses(tokens) -> list[list[int]]:
-    ids = [SUPERSENSE_TO_ID[s] for word in tokens for s in get_word_supersenses(word)]
-    return [
-        [1 if i in ids else 0 if ids else -100 for i in range(NUM_SUPERSENSE_CLASSES)]
-        for word in tokens
-    ]
 
 
 def load_data(datasets, split="train", mark_target=False):
@@ -221,7 +181,9 @@ class MultiTaskModelOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class CustomMultiTaskModel(PreTrainedModel):
+class CustomMultiTaskModel(ModernBertPreTrainedModel):
+    _tied_weights_keys = ["decoder.weight"]
+
     def __init__(self, config):
         super().__init__(config)
         self.config = config
@@ -241,6 +203,7 @@ class CustomMultiTaskModel(PreTrainedModel):
         self.loss_seq = nn.CrossEntropyLoss()
         self.loss_tok = nn.BCEWithLogitsLoss()
         self.loss_mlm = nn.CrossEntropyLoss()
+
         self.post_init()
 
     @torch.compile(dynamic=True)
@@ -262,6 +225,11 @@ class CustomMultiTaskModel(PreTrainedModel):
         return_dict=None,
         num_items_in_batch=None,
     ):
+        if self.config._attn_implementation == "flash_attention_2":
+            with torch.no_grad():
+                input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_modernbert_input(
+                    inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=mlm_labels
+                )
         # 1. Get standard word embeddings
         embed = self.model.embeddings
         word_embeds = embed.tok_embeddings(input_ids)
@@ -526,10 +494,11 @@ def main():
     )
 
     # Initialize model
-    config = AutoConfig.from_pretrained(args.model, attn_implementation="flash_attention_2", num_labels=2)
+    config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.embedding_dropout = 0.1
     config.classifier_dropout = 0.1
+    config._attn_implementation = "flash_attention_2" if device == "cuda" else None
     model = CustomMultiTaskModel(config)
     # model = torch.compile(model, mode="max-autotune")
 
