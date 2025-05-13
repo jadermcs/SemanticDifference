@@ -212,18 +212,15 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
 
     def forward(
         self,
-        input_ids,
-        attention_mask=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,  # Labels for sequence classification
-        mlm_labels=None,  # Labels for MLM
-        token_labels=None,  # Labels for token classification
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-        num_items_in_batch=None,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,  # Labels for sequence classification
+        mlm_labels: Optional[torch.Tensor] = None,  # Labels for MLM
+        token_labels: Optional[torch.Tensor] = None,  # Labels for token classification
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
     ):
         # 1. Get standard word embeddings
         embed = self.model.embeddings
@@ -238,18 +235,12 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             word_embeds += sense_embeds
 
         inputs_embeds = embed.drop(embed.norm(word_embeds))
-        if self.config._attn_implementation == "flash_attention_2":
-            with torch.no_grad():
-                inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_modernbert_input(
-                    inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=mlm_labels
-                )
 
         outputs = self.model(
             inputs_embeds=inputs_embeds,
-            # input_ids=input_ids,
             attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,  # Recommended
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
         )
         last_hidden_state = outputs[0]
 
