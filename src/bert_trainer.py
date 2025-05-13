@@ -361,7 +361,7 @@ class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
         label_ids = {
-            "sequence": inputs.get("labels"),
+            "sequence": inputs.get("seq_labels"),
         }
         if "token_labels" in inputs:
             label_ids["token"] = inputs["token_labels"]
