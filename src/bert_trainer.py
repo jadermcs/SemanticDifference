@@ -488,7 +488,6 @@ def main():
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.embedding_dropout = 0.1
     config.classifier_dropout = 0.1
-    config._attn_implementation = "flash_attention_2" if device == "cuda" else None
     model = CustomMultiTaskModel(config)
     # model = torch.compile(model, mode="max-autotune")
 
