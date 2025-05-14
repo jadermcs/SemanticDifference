@@ -117,6 +117,7 @@ def align(examples, tokenizer, mode="train"):
         return_offsets_mapping=True,
         max_length=MAX_LENGTH,
         padding="max_length",
+        return_tensors="pt",
     )
     ignore = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
     labels = []
