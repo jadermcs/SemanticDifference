@@ -230,7 +230,8 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         mask = (mlm_labels != -100) if mlm_labels is not None else None
         if token_labels is not None and mlm_labels is not None:
             # Only provide embeddings for unmasked tokens
-            reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
+            with torch.no_grad():
+                reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
             masked_token_labels = token_labels * reshape_mask
             sense_embeds = masked_token_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
@@ -267,7 +268,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         if mlm_labels is not None:
             mlm_labels = mlm_labels[mask]
             masked_mlm_logits = mlm_logits[mask]
-            mlm_loss = self.loss_mlm(masked_mlm_logits.view(mlm_labels.shape[0], -1), mlm_labels.view(-1))
+            mlm_loss = self.loss_mlm(masked_mlm_logits, mlm_labels)
             loss += mlm_loss
         if token_labels is not None and mlm_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
@@ -278,7 +279,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             # Compute loss
             token_loss = self.loss_tok(masked_token_logits, token_labels)
             uniform_loss = (
-                masked_token_logits.softmax(dim=-1).sum() / token_labels.sum()
+                masked_token_logits.sigmoid().sum() / token_labels.sum()
             )
             loss += token_loss + uniform_loss
         if seq_labels is not None:
