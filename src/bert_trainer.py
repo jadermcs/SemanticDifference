@@ -209,13 +209,13 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        masked_tokens = None
         if token_labels is not None:
+            masked_token_labels = token_labels.float()
             if mlm_labels is not None:
                 masked_tokens = mlm_labels == -100
                 masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
-                token_labels *= masked_tokens
-            sense_embeds = token_labels.float() @ self.sense_embeddings
+                masked_token_labels *= masked_tokens
+            sense_embeds = masked_token_labels @ self.sense_embeddings
             word_embeds += sense_embeds
 
         inputs_embeds = embed.drop(embed.norm(word_embeds))
