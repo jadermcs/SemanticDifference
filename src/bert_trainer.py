@@ -230,8 +230,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         mask = (mlm_labels != -100) if mlm_labels is not None else None
         if token_labels is not None and mlm_labels is not None:
             # Only provide embeddings for unmasked tokens
-            with torch.no_grad():
-                reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
+            reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
             masked_token_labels = token_labels * reshape_mask
             sense_embeds = masked_token_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
@@ -241,22 +240,21 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         outputs = self.model(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
-            output_hidden_states=output_hidden_states,
+            output_hidden_states=True,
             return_dict=return_dict,
         )
-        last_hidden_state = self.compiled_head(outputs[0])
+        last_hidden_state = self.compiled_head(outputs.hidden_states[-1])
         mlm_logits = self.decoder(last_hidden_state)
 
         last_hidden_state = self.drop(last_hidden_state)
         token_logits = self.token_classifier(last_hidden_state)
 
-        # if self.config.classifier_pooling == "cls":
-        #     pooled_output = last_hidden_state[:, 0]
-        # else:
-        #     pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(
-        #         dim=1, keepdim=True
-        #     )
-        pooled_output = last_hidden_state[:, 0]
+        if self.config.classifier_pooling == "cls":
+            pooled_output = last_hidden_state[:, 0]
+        else:
+            pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(
+                dim=1, keepdim=True
+            )
 
         sequence_logits = self.sequence_classifier(pooled_output)
 
