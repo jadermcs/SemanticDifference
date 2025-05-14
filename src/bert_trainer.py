@@ -243,7 +243,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        last_hidden_state = self.compiled_head(outputs.hidden_states[-1])
+        last_hidden_state = self.compiled_head(outputs[0])
         mlm_logits = self.decoder(last_hidden_state)
 
         last_hidden_state = self.drop(last_hidden_state)
