@@ -249,7 +249,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         if token_labels is not None and masked_tokens is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
-            valid_mask = valid_mask & ~masked_tokens
+            valid_mask = valid_mask
             # Apply the mask
             token_labels = token_labels[valid_mask].float()  # match logits' shape
             masked_token_logits = token_logits[valid_mask]
