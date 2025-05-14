@@ -186,7 +186,6 @@ class CustomMultiTaskModel(PreTrainedModel):
     def forward(
         self,
         input_ids,
-        sense_ids=None,
         attention_mask=None,
         token_type_ids=None,
         position_ids=None,
@@ -204,9 +203,9 @@ class CustomMultiTaskModel(PreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        if sense_ids is not None:
-            sense_embeds = self.sense_embeddings(sense_ids)
-            word_embeds = word_embeds + sense_embeds
+        # if token_labels is not None:
+        #     sense_embeds = self.sense_embeddings()
+        #     word_embeds = word_embeds + sense_embeds
 
         final_embeddings = embed.drop(embed.norm(word_embeds))
 
@@ -252,7 +251,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_loss = loss_fct(masked_token_logits, token_labels)
             loss += token_loss  # + uniform_loss
             if self.config.uniform_token_loss:
-                uniform_loss = masked_token_logits.sum() / token_labels.sum()
+                uniform_loss = masked_token_logits.sigmoid().sum() / token_labels.sum()
                 loss += uniform_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
@@ -296,6 +295,7 @@ def compute_metrics(pred):
 
     metrics = {
         # Sequence classification
+        "loss": pred.predictions["loss"].mean(),
         "seq_accuracy": seq_acc,
         "seq_f1": seq_f1,
         "seq_precision": seq_precision,
@@ -334,7 +334,7 @@ class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
         labels = {
-            "sequence": inputs.get("labels"),
+            "sequence": inputs["labels"],
         }
         if "token_labels" in inputs:
             labels["token"] = inputs["token_labels"]
@@ -343,10 +343,10 @@ class MultiTaskTrainer(Trainer):
             outputs = model(**inputs, return_dict=True)
 
         logits = {
+            "loss": outputs.loss,
             "sequence": outputs.sequence_logits,
+            "token": outputs["token_logits"].sigmoid()
         }
-        if "token_logits" in outputs:
-            logits["token"] = outputs["token_logits"]
         return None, logits, labels
 
 
