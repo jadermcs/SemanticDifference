@@ -1,6 +1,5 @@
 from nltk.corpus import wordnet
 from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
 from functools import lru_cache
 # Initialize WordNet lemmatizer
 lemmatizer = WordNetLemmatizer()

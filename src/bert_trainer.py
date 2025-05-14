@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 import argparse
-
-from pandas.core.reshape.api import cut
 import torch
 import torch.nn as nn
 import json
-from wordnet_utils import get_word_supersenses, word_tokenize, NUM_SUPERSENSE_CLASSES
+from wordnet_utils import get_word_supersenses, NUM_SUPERSENSE_CLASSES
 from tqdm import tqdm
 from transformers import (
     AutoModelForMaskedLM,
@@ -48,6 +46,7 @@ def load_data(datasets, split="train"):
 
     processed_data = []
     for item in tqdm(all_data):
+        w1, w2 = item["WORD_x"], item["WORD_y"]
         s1 = item["USAGE_x"]
         s2 = item["USAGE_y"]
 
@@ -66,25 +65,53 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     """
     Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
     """
+    mask_replace_prob = 0.8
+    random_replace_prob = 0.1
     # We sample a few tokens in each sequence for MLM training (with probability self.mlm_probability)
-    probability_matrix = torch.full(inputs.shape, mlm_probability)
-    special_tokens_mask = tokenizer.get_special_tokens_mask(
-        inputs, already_has_special_tokens=True
-    )
+    labels = inputs.clone()
+    # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
+    probability_matrix = torch.full(labels.shape, mlm_probability)
+    special_tokens_mask = [
+        tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
+        for val in labels.tolist()
+    ]
     special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
 
     probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
     masked_indices = torch.bernoulli(probability_matrix).bool()
+    labels[~masked_indices] = IGNORE_ID  # We only compute loss on masked tokens
 
-    # we replace masked input tokens with tokenizer.mask_token ([MASK])
-    inputs[masked_indices] = tokenizer.mask_token_id
+    # mask_replace_prob% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+    indices_replaced = (
+        torch.bernoulli(torch.full(labels.shape, mask_replace_prob)).bool()
+        & masked_indices
+    )
+    inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
 
-    # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-    return inputs, masked_indices
+    if mask_replace_prob == 1 or random_replace_prob == 0:
+        return inputs, labels
+
+    remaining_prob = 1 - mask_replace_prob
+    # scaling the random_replace_prob to the remaining probability for example if
+    # mask_replace_prob = 0.8 and random_replace_prob = 0.1,
+    # then random_replace_prob_scaled = 0.1 / 0.2 = 0.5
+    random_replace_prob_scaled = random_replace_prob / remaining_prob
+
+    # random_replace_prob% of the time, we replace masked input tokens with random word
+    indices_random = (
+        torch.bernoulli(torch.full(labels.shape, random_replace_prob_scaled)).bool()
+        & masked_indices
+        & ~indices_replaced
+    )
+    random_words = torch.randint(len(tokenizer), labels.shape, dtype=torch.long)
+    inputs[indices_random] = random_words[indices_random]
+
+    # The rest of the time ((1-random_replace_prob-mask_replace_prob)% of the time) we keep the masked input tokens unchanged
+    return inputs, labels
 
 
-def tokenize_and_align_labels(examples, tokenizer):
-    tokenized_inputs = tokenizer(
+def align(examples, tokenizer, mode="train"):
+    inputs = tokenizer(
         examples["sentences"],
         truncation=True,
         return_offsets_mapping=True,
@@ -93,7 +120,7 @@ def tokenize_and_align_labels(examples, tokenizer):
     )
     ignore = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
     labels = []
-    for i, offsets in enumerate(tokenized_inputs["offset_mapping"]):
+    for i, offsets in enumerate(inputs["offset_mapping"]):
         text = examples["sentences"][i]
         text_len = len(text)
         label_ids = []
@@ -111,8 +138,10 @@ def tokenize_and_align_labels(examples, tokenizer):
                 label_ids.append(ignore)
         labels.append(label_ids)
 
-    tokenized_inputs["token_labels"] = labels
-    return tokenized_inputs
+    inputs["token_labels"] = labels
+    if mode == "train":
+        inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(inputs["input_ids"], tokenizer)
+    return inputs
 
 
 def preprocess_function(examples, tokenizer):
@@ -120,15 +149,6 @@ def preprocess_function(examples, tokenizer):
     return {
         "sentences": f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}",
     }
-
-
-def align(examples, tokenizer, supersense=False):
-    tokens = tokenize_and_align_labels(examples, tokenizer)
-    if not supersense:
-        del tokens["token_labels"]
-    tokens["labels"] = examples["labels"]
-    return tokens
-
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
@@ -163,6 +183,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
         self.loss_seq = nn.CrossEntropyLoss()
         self.loss_tok = nn.BCEWithLogitsLoss()
+        self.loss_mlm = nn.CrossEntropyLoss()
 
         self.post_init()
 
@@ -399,7 +420,7 @@ def main():
 
     datasets = datasets.map(
         align,
-        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
+        fn_kwargs={"tokenizer": tokenizer, "mode": "train"},
         batched=True,
         remove_columns=datasets["train"].column_names,
         # num_proc=4,
