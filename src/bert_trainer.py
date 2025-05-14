@@ -3,8 +3,8 @@
 import argparse
 import torch
 import torch.nn as nn
-from wordnet_utils import word_tokenize, encode_supersenses, NUM_SUPERSENSE_CLASSES
 import json
+from wordnet_utils import word_tokenize, encode_supersenses, NUM_SUPERSENSE_CLASSES
 from tqdm import tqdm
 from transformers import (
     AutoModelForMaskedLM,
@@ -31,7 +31,6 @@ MAX_LENGTH = 128
 MLM_PROBABILITY = 0.3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
-PAD_SENSE_ID = 0  # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
 EVAL_STEPS = 500
 IGNORE_ID = -100
@@ -162,33 +161,23 @@ class CustomMultiTaskModel(PreTrainedModel):
             self.sense_embeddings = nn.Parameter(
                 torch.empty(config.num_token_labels, config.hidden_size)
             )
-            # Optional: Initialize sense embeddings (e.g., Xavier initialization)
             nn.init.xavier_uniform_(self.sense_embeddings)
-        #
-        # Example: Add a classification head
         self.drop = nn.Dropout(config.classifier_dropout)
-        self.sequence_classifier = nn.Linear(
-            config.hidden_size, config.num_labels
-        )  # Binary classification
-        self.token_classifier = nn.Linear(
-            config.hidden_size, config.num_token_labels
-        )  # Token classification
+        self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
         self.post_init()
 
     def forward(
         self,
-        input_ids,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,  # Labels for sequence classification
-        mlm_labels=None,  # Labels for MLM
-        token_labels=None,  # Labels for token classification
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,  # Labels for sequence classification
+        mlm_labels: Optional[torch.Tensor] = None,  # Labels for MLM
+        token_labels: Optional[torch.Tensor] = None,  # Labels for token classification
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
     ):
         # 1. Get standard word embeddings
         embed = self.model.model.embeddings
@@ -196,20 +185,18 @@ class CustomMultiTaskModel(PreTrainedModel):
 
         # 2. Get sense embeddings
         if token_labels is not None and mlm_labels is not None:
-            masked_tokens = mlm_labels == 100
+            masked_tokens = mlm_labels == -100
             masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
             masked_token_labels = token_labels * masked_tokens
             sense_embeds = masked_token_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
 
-        final_embeddings = embed.drop(embed.norm(word_embeds))
+        inputs_embeds = embed.drop(embed.norm(word_embeds))
 
         outputs = self.model(
-            inputs_embeds=final_embeddings,
-            # input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask.squeeze(1),
             labels=mlm_labels,
-            token_type_ids=None,  # Not needed here as types are in final_embeddings
             output_hidden_states=True,
             return_dict=True,  # Recommended
         )
@@ -289,8 +276,8 @@ def compute_metrics(pred):
     seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
 
     metrics = {
-        # Sequence classification
         "loss": pred.predictions["loss"].mean(),
+        # Sequence classification
         "seq_accuracy": seq_acc,
         "seq_f1": seq_f1,
         "seq_precision": seq_precision,
@@ -328,21 +315,21 @@ def compute_metrics(pred):
 class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
-        labels = {
+        label_ids = {
             "sequence": inputs["labels"],
         }
         if "token_labels" in inputs:
-            labels["token"] = inputs["token_labels"]
+            label_ids["token"] = inputs["token_labels"]
 
         with torch.no_grad():
             outputs = model(**inputs, return_dict=True)
 
-        logits = {
+        predictions = {
             "loss": outputs.loss,
             "sequence": outputs.sequence_logits,
             "token": outputs["token_logits"].sigmoid()
         }
-        return None, logits, labels
+        return None, predictions, label_ids
 
 
 def main():
@@ -366,12 +353,6 @@ def main():
         action="store_true",
         default=False,
         help="Use supersense classification",
-    )
-    parser.add_argument(
-        "--uniform",
-        action="store_true",
-        default=False,
-        help="Use uniform regularization for supersense.",
     )
     parser.add_argument(
         "--output_dir",
@@ -407,7 +388,6 @@ def main():
     if args.wandb_run_name is None:
         args.wandb_run_name = f"{args.model.split('/')[-1]}-{args.dataset}-classifier"
         args.wandb_run_name += "-supersense" if args.supersense else ""
-        args.wandb_run_name += "-uniform" if args.uniform else ""
 
     wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
@@ -439,10 +419,8 @@ def main():
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
-    config.pad_sense_id = PAD_SENSE_ID
     config.mask_token_id = tokenizer.mask_token_id
     config.classifier_dropout = 0.1
-    config.uniform_token_loss = args.uniform
     model = CustomMultiTaskModel(config)
 
     # Define training arguments
@@ -461,6 +439,9 @@ def main():
         label_names=["labels"],
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
+        gradient_accumulation_steps=32//args.batch_size,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True if device.type == "cuda" else False,
         report_to="wandb",
         run_name=args.wandb_run_name,
     )
