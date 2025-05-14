@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 import argparse
+
+from pandas.core.reshape.api import cut
 import torch
 import torch.nn as nn
 import json
-from wordnet_utils import word_tokenize, encode_supersenses, NUM_SUPERSENSE_CLASSES
+from wordnet_utils import get_word_supersenses, word_tokenize, NUM_SUPERSENSE_CLASSES
 from tqdm import tqdm
 from transformers import (
     AutoModelForMaskedLM,
@@ -88,37 +90,28 @@ def tokenize_and_align_labels(examples, tokenizer):
         return_offsets_mapping=True,
         max_length=MAX_LENGTH,
         padding="max_length",
-        return_tensors="pt",
     )
-    mask = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
+    ignore = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
     labels = []
     for i, offsets in enumerate(tokenized_inputs["offset_mapping"]):
         text = examples["sentences"][i]
-        words = word_tokenize(text)
-        word_labels = encode_supersenses(words)
-        pointer = 0
-
-        # Create a char-to-word index
-        char_to_word = {}
-        for word_idx, word in enumerate(words):
-            for c in range(pointer, pointer + len(word)):
-                char_to_word[c] = word_idx
-            pointer += len(word) + 1  # account for space
-
+        text_len = len(text)
         label_ids = []
+        current_word = ""
         for offset in offsets:
-            start, end = offset.tolist()
-            if start == end:
-                label_ids.append(mask)
-            elif start in char_to_word:
-                word_idx = char_to_word[start]
-                label_ids.append(word_labels[word_idx])
+            start, end = offset
+            word = text[start:end]
+            current_word += word
+            if end < text_len and not text[end].isalpha():
+                # Word is striped inside helper function
+                get_supersenses = get_word_supersenses(current_word)
+                label_ids.append(get_supersenses if get_supersenses else ignore)
+                current_word = ""
             else:
-                label_ids.append(mask)
-
+                label_ids.append(ignore)
         labels.append(label_ids)
 
-    tokenized_inputs["token_labels"] = torch.tensor(labels)
+    tokenized_inputs["token_labels"] = labels
     return tokenized_inputs
 
 
@@ -409,7 +402,7 @@ def main():
         fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
         batched=True,
         remove_columns=datasets["train"].column_names,
-        num_proc=4,
+        # num_proc=4,
     )
 
     # Initialize model
