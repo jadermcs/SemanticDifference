@@ -250,12 +250,13 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         last_hidden_state = self.drop(last_hidden_state)
         token_logits = self.token_classifier(last_hidden_state)
 
-        if self.config.classifier_pooling == "cls":
-            pooled_output = last_hidden_state[:, 0]
-        else:
-            pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(
-                dim=1, keepdim=True
-            )
+        # if self.config.classifier_pooling == "cls":
+        #     pooled_output = last_hidden_state[:, 0]
+        # else:
+        #     pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(
+        #         dim=1, keepdim=True
+        #     )
+        pooled_output = last_hidden_state[:, 0]
 
         sequence_logits = self.sequence_classifier(pooled_output)
 
