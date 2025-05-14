@@ -109,16 +109,18 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     # The rest of the time ((1-random_replace_prob-mask_replace_prob)% of the time) we keep the masked input tokens unchanged
     return inputs, labels
 
-
-def align(examples, tokenizer, supersense=False, mode="train"):
-    inputs = tokenizer(
-        examples["sentences"],
+def tokenize(sentence, tokenizer):
+    return tokenizer(
+        sentence,
         truncation=True,
         return_offsets_mapping=True,
         max_length=MAX_LENGTH,
         padding="max_length",
-        return_tensors="pt",
+        return_tensors="pt"
     )
+
+def align(examples, tokenizer, supersense=False, mode="train"):
+    inputs = tokenize(examples["sentences"], tokenizer)
     ignore = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
     labels = []
     for i, offsets in enumerate(inputs["offset_mapping"]):
@@ -207,6 +209,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
+        masked_tokens = None
         if token_labels is not None and mlm_labels is not None:
             masked_tokens = mlm_labels == -100
             masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
@@ -243,9 +246,10 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         if mlm_labels is not None:
             mlm_loss = outputs.loss
             loss += mlm_loss
-        if token_labels is not None:
+        if token_labels is not None and masked_tokens is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
+            valid_mask = valid_mask & ~masked_tokens
             # Apply the mask
             token_labels = token_labels[valid_mask].float()  # match logits' shape
             masked_token_logits = token_logits[valid_mask]
@@ -331,7 +335,7 @@ class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
         label_ids = {
-            "sequence": inputs.get("labels"),
+            "sequence": inputs["labels"],
         }
         if "token_labels" in inputs:
             label_ids["token"] = inputs["token_labels"]
