@@ -12,9 +12,10 @@ from transformers import (
     TrainingArguments,
     Trainer,
     AutoConfig,
-    PreTrainedModel,
+    ModernBertPreTrainedModel,
     set_seed,
 )
+from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead, _unpad_modernbert_input
 import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
@@ -149,7 +150,9 @@ class MultiTaskModelOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class CustomMultiTaskModel(PreTrainedModel):
+class CustomMultiTaskModel(ModernBertPreTrainedModel):
+    _tied_weights_keys = ["decoder.weight"]
+
     def __init__(self, config):
         super().__init__(config)
         self.config = config
