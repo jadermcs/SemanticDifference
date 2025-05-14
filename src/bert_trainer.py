@@ -159,13 +159,11 @@ class CustomMultiTaskModel(PreTrainedModel):
             config._name_or_path, config=config
         )  # Or your specific base model
         if config.num_token_labels > 0:
-            self.sense_embeddings = nn.Embedding(
-                config.num_token_labels,
-                config.hidden_size,
-                padding_idx=config.pad_sense_id,
+            self.sense_embeddings = nn.Parameter(
+                torch.empty(config.num_token_labels, config.hidden_size)
             )
             # Optional: Initialize sense embeddings (e.g., Xavier initialization)
-            nn.init.xavier_uniform_(self.sense_embeddings.weight)
+            nn.init.xavier_uniform_(self.sense_embeddings)
         #
         # Example: Add a classification head
         self.drop = nn.Dropout(config.classifier_dropout)
@@ -197,9 +195,12 @@ class CustomMultiTaskModel(PreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        # if token_labels is not None:
-        #     sense_embeds = self.sense_embeddings()
-        #     word_embeds = word_embeds + sense_embeds
+        if token_labels is not None and mlm_labels is not None:
+            masked_tokens = mlm_labels == 100
+            masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
+            masked_token_labels = token_labels * masked_tokens
+            sense_embeds = masked_token_labels.float() @ self.sense_embeddings
+            word_embeds += sense_embeds
 
         final_embeddings = embed.drop(embed.norm(word_embeds))
 
