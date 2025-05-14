@@ -393,9 +393,7 @@ def main():
     datasets = DatasetDict({"train": train_dataset, "test": test_dataset})
 
     # Initialize tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model, add_prefix_space=args.supersense
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
 
     datasets = datasets.map(
         preprocess_function,
