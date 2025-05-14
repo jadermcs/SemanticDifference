@@ -415,7 +415,7 @@ def main():
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
     config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
-    config.mask_token_id = tokenizer.mask_token_id
+    config.embedding_dropout = 0.1
     config.classifier_dropout = 0.1
     model = CustomMultiTaskModel(config)
 
