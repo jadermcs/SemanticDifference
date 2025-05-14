@@ -227,7 +227,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        mask = (mlm_labels == -100) if mlm_labels is not None else None
+        mask = (mlm_labels != -100) if mlm_labels is not None else None
         if token_labels is not None and mlm_labels is not None:
             # Only provide embeddings for unmasked tokens
             reshape_mask = ~mask.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
@@ -243,10 +243,11 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        last_hidden_state = outputs[0]
+        last_hidden_state = self.compiled_head(outputs.hidden_states[-1])
+        mlm_logits = self.decoder(last_hidden_state)
 
-        last_hidden_state = self.compiled_head(last_hidden_state)
         last_hidden_state = self.drop(last_hidden_state)
+        token_logits = self.token_classifier(last_hidden_state)
 
         if self.config.classifier_pooling == "cls":
             pooled_output = last_hidden_state[:, 0]
@@ -256,8 +257,6 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             )
 
         sequence_logits = self.sequence_classifier(pooled_output)
-        token_logits = self.token_classifier(last_hidden_state)
-        mlm_logits = self.decoder(last_hidden_state)
 
         # --- Calculate Losses ---
         loss = torch.tensor(0.0, device=last_hidden_state.device)
