@@ -110,7 +110,7 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     return inputs, labels
 
 
-def align(examples, tokenizer, mode="train"):
+def align(examples, tokenizer, supersense=False, mode="train"):
     inputs = tokenizer(
         examples["sentences"],
         truncation=True,
@@ -139,7 +139,9 @@ def align(examples, tokenizer, mode="train"):
                 label_ids.append(ignore)
         labels.append(label_ids)
 
-    inputs["token_labels"] = labels
+    if supersense:
+        inputs["token_labels"] = labels
+    inputs["labels"] = examples["labels"]
     if mode == "train":
         inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(inputs["input_ids"], tokenizer)
     return inputs
@@ -147,9 +149,9 @@ def align(examples, tokenizer, mode="train"):
 
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
-    return {
-        "sentences": f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}",
-    }
+    examples["sentences"] = f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}"
+    return examples
+
 
 @dataclass
 class MultiTaskModelOutput(ModelOutput):
@@ -329,7 +331,7 @@ class MultiTaskTrainer(Trainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
         label_ids = {
-            "sequence": inputs["labels"],
+            "sequence": inputs.get("labels"),
         }
         if "token_labels" in inputs:
             label_ids["token"] = inputs["token_labels"]
@@ -419,12 +421,24 @@ def main():
         num_proc=4,
     )
 
-    datasets = datasets.map(
+    datasets["train"] = datasets["train"].map(
         align,
-        fn_kwargs={"tokenizer": tokenizer, "mode": "train"},
+        fn_kwargs={"tokenizer": tokenizer},
         batched=True,
         remove_columns=datasets["train"].column_names,
-        # num_proc=4,
+        num_proc=4,
+    )
+    # During test we show all the tokens however we don't give supersense embeddings
+    datasets["test"] = datasets["test"].map(
+        align,
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "supersense": args.supersense,
+            "mode": "test",
+        },
+        batched=True,
+        remove_columns=datasets["test"].column_names,
+        num_proc=4,
     )
 
     # Initialize model
