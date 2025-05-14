@@ -223,18 +223,14 @@ class CustomMultiTaskModel(PreTrainedModel):
         if token_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
-
             # Apply the mask
             token_labels = token_labels[valid_mask].float()  # match logits' shape
             masked_token_logits = token_logits[valid_mask]
-
             # Compute loss
             loss_fct = nn.BCEWithLogitsLoss()
             token_loss = loss_fct(masked_token_logits, token_labels)
-            loss += token_loss  # + uniform_loss
-            if self.config.uniform_token_loss:
-                uniform_loss = masked_token_logits.sigmoid().sum() / token_labels.sum()
-                loss += uniform_loss
+            uniform_loss = masked_token_logits.sigmoid().sum() / token_labels.sum()
+            loss += token_loss + uniform_loss
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             sequence_loss = loss_fct(
