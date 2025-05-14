@@ -165,6 +165,9 @@ class CustomMultiTaskModel(PreTrainedModel):
         self.drop = nn.Dropout(config.classifier_dropout)
         self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
+        self.loss_seq = nn.CrossEntropyLoss()
+        self.loss_tok = nn.BCEWithLogitsLoss()
+
         self.post_init()
 
     def forward(
@@ -198,12 +201,12 @@ class CustomMultiTaskModel(PreTrainedModel):
             attention_mask=attention_mask.squeeze(1),
             labels=mlm_labels,
             output_hidden_states=True,
-            return_dict=True,  # Recommended
+            return_dict=True,
         )
 
         sequence_output = self.drop(
             outputs.hidden_states[-1]
-        )  # Hidden states of the last layer
+        )
 
         sequence_logits = self.sequence_classifier(
             sequence_output[:, 0, :]
@@ -227,15 +230,11 @@ class CustomMultiTaskModel(PreTrainedModel):
             token_labels = token_labels[valid_mask].float()  # match logits' shape
             masked_token_logits = token_logits[valid_mask]
             # Compute loss
-            loss_fct = nn.BCEWithLogitsLoss()
-            token_loss = loss_fct(masked_token_logits, token_labels)
+            token_loss = self.loss_tok(masked_token_logits, token_labels)
             uniform_loss = masked_token_logits.sigmoid().sum() / token_labels.sum()
             loss += token_loss + uniform_loss
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            sequence_loss = loss_fct(
-                sequence_logits.view(-1, self.num_labels), labels.view(-1)
-            )
+            sequence_loss = self.loss_seq(sequence_logits.view(-1, self.num_labels), labels.view(-1))
             loss += sequence_loss
 
         if not return_dict:
