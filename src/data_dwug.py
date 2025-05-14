@@ -27,14 +27,14 @@ def convert(pos):
 def main():
     print("Getting dwug data.")
     uses = []
-    for file in glob("dwug_en_resampled/data/*/uses.csv"):
+    for file in glob("data/dwug/*/uses.csv"):
         uses.append(pd.read_csv(file, sep="\t"))
     uses = pd.concat(uses)
 
     mapper = {k: v for k, v in uses[["identifier", "context"]].values}
 
     judgments = []
-    for file in glob("dwug_en_resampled/data/*/judgments.csv"):
+    for file in glob("data/dwug/*/judgments.csv"):
         judgments.append(pd.read_csv(file, sep="\t"))
     judgments = pd.concat(judgments)
 
