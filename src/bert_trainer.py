@@ -31,14 +31,13 @@ MAX_LENGTH = 128
 MLM_PROBABILITY = 0.3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
-START_TARGET_TOKEN = "[TGT]"
-END_TARGET_TOKEN = "[/TGT]"
 PAD_SENSE_ID = 0  # Make sure sense ID 0 is reserved for this
 WEIGHT_DECAY = 0.01
 EVAL_STEPS = 500
+IGNORE_ID = -100
 
 
-def load_data(datasets, split="train", mark_target=False):
+def load_data(datasets, split="train"):
     """Load and process the WiC dataset."""
     all_data = []
     for dataset in datasets.split(","):
@@ -47,13 +46,8 @@ def load_data(datasets, split="train", mark_target=False):
 
     processed_data = []
     for item in tqdm(all_data):
-        w1, w2 = item["WORD_x"], item["WORD_y"]
         s1 = item["USAGE_x"]
         s2 = item["USAGE_y"]
-
-        if mark_target:
-            s1 = s1.replace(w1, f"{START_TARGET_TOKEN}{w1}{END_TARGET_TOKEN}")
-            s2 = s2.replace(w2, f"{START_TARGET_TOKEN}{w2}{END_TARGET_TOKEN}")
 
         processed_entry = {
             "sentence1": s1,
@@ -96,7 +90,7 @@ def tokenize_and_align_labels(examples, tokenizer):
         padding="max_length",
         return_tensors="pt",
     )
-    mask = [-100] * NUM_SUPERSENSE_CLASSES
+    mask = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
     labels = []
     for i, offsets in enumerate(tokenized_inputs["offset_mapping"]):
         text = examples["sentences"][i]
@@ -240,7 +234,7 @@ class CustomMultiTaskModel(PreTrainedModel):
             loss += mlm_loss
         if token_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
-            valid_mask = token_labels != -100
+            valid_mask = token_labels != IGNORE_ID
 
             # Apply the mask
             token_labels = token_labels[valid_mask].float()  # match logits' shape
@@ -367,12 +361,6 @@ def main():
         "--epochs", type=int, default=10, help="Number of epochs to train"
     )
     parser.add_argument(
-        "--mark_target",
-        action="store_true",
-        default=False,
-        help="Mark the target word in the sentences",
-    )
-    parser.add_argument(
         "--supersense",
         action="store_true",
         default=False,
@@ -423,8 +411,8 @@ def main():
     wandb.init(project=args.wandb_project, name=args.wandb_run_name, config=vars(args))
 
     # Load dataset
-    train_dataset = load_data(args.dataset, split="train", mark_target=args.mark_target)
-    test_dataset = load_data("wic", split="test", mark_target=args.mark_target)
+    train_dataset = load_data(args.dataset, split="train")
+    test_dataset = load_data("wic", split="test")
 
     datasets = DatasetDict({"train": train_dataset, "test": test_dataset})
 
@@ -455,10 +443,6 @@ def main():
     config.classifier_dropout = 0.1
     config.uniform_token_loss = args.uniform
     model = CustomMultiTaskModel(config)
-    # model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=2)
-    if args.mark_target:
-        tokenizer.add_tokens([START_TARGET_TOKEN, END_TARGET_TOKEN])
-        model.resize_token_embeddings(len(tokenizer))
 
     # Define training arguments
     training_args = TrainingArguments(
