@@ -221,53 +221,21 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
 def compute_metrics(pred):
     """Compute metrics for both sequence and token classification."""
     # Unpack predictions and labels
-    seq_preds = pred.predictions["sequence"]
-    seq_labels = pred.label_ids["sequence"]
+    preds = pred.predictions["logits"]
+    labels = pred.label_ids["labels"]
 
-    token_preds = pred.predictions.get("token")
-    token_labels = pred.label_ids.get("token")
-
-    # Sequence Classification (e.g., sentiment classification)
-    seq_preds_argmax = seq_preds.argmax(-1)
+    seq_preds_argmax = preds.argmax(-1)
     seq_precision, seq_recall, seq_f1, _ = precision_recall_fscore_support(
-        seq_labels, seq_preds_argmax, average="weighted"
+        labels, seq_preds_argmax, average="weighted"
     )
-    seq_acc = accuracy_score(seq_labels, seq_preds_argmax)
+    seq_acc = accuracy_score(labels, seq_preds_argmax)
 
     metrics = {
-        "loss": pred.predictions["loss"].mean(),
-        # Sequence classification
         "seq_accuracy": seq_acc,
         "seq_f1": seq_f1,
         "seq_precision": seq_precision,
         "seq_recall": seq_recall,
     }
-    # Token Classification (e.g., NER)
-    if token_labels is not None:
-        token_preds_argmax = token_preds > 0.5
-
-        # Flatten inputs, ignore special tokens (commonly labeled -100)
-        true_token_labels = token_labels.flatten()
-        pred_token_labels = token_preds_argmax.flatten()
-
-        mask = true_token_labels != 100
-        true_token_labels = true_token_labels[mask]
-        pred_token_labels = pred_token_labels[mask]
-
-        token_precision, token_recall, token_f1, _ = precision_recall_fscore_support(
-            true_token_labels, pred_token_labels, average="weighted"
-        )
-        token_acc = accuracy_score(true_token_labels, pred_token_labels)
-
-        # Token classification
-        metrics.update(
-            {
-                "token_accuracy": token_acc,
-                "token_f1": token_f1,
-                "token_precision": token_precision,
-                "token_recall": token_recall,
-            }
-        )
     return metrics
 
 
@@ -277,18 +245,10 @@ class MultiTaskTrainer(Trainer):
         label_ids = {
             "sequence": inputs["labels"],
         }
-        if "token_labels" in inputs:
-            label_ids["token"] = inputs["token_labels"]
-
         with torch.no_grad():
             outputs = model(**inputs, return_dict=True)
 
-        predictions = {
-            "loss": outputs.loss,
-            "sequence": outputs.sequence_logits,
-            "token": outputs["token_logits"].sigmoid()
-        }
-        return None, predictions, label_ids
+        return None, outputs, label_ids
 
 
 def main():
