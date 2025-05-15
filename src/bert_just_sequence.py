@@ -34,7 +34,6 @@ MLM_PROBABILITY = 0.3
 LEARNING_RATE = 2e-5
 WARMUP_STEPS = 500
 WEIGHT_DECAY = 0.01
-EVAL_STEPS = 500
 IGNORE_ID = -100
 
 
@@ -297,6 +296,9 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
+    parser.add_argument(
+        "--steps", type=int, default=500, help="Frequency to run evaluation"
+    )
 
     args = parser.parse_args()
 
@@ -360,7 +362,7 @@ def main():
         num_train_epochs=args.epochs,
         weight_decay=WEIGHT_DECAY,
         eval_strategy="steps",
-        eval_steps=EVAL_STEPS,
+        eval_steps=args.steps,
         load_best_model_at_end=True,
         metric_for_best_model="seq_f1",
         greater_is_better=True,
