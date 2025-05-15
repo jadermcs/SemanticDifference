@@ -251,7 +251,7 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         if token_labels is not None and mlm_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
-            masked_tokens = mlm_labels == IGNORE_ID
+            masked_tokens = mlm_labels != IGNORE_ID
             masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
             valid_mask &= masked_tokens
             # Apply the mask
