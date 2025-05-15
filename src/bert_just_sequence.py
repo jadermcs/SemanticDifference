@@ -193,8 +193,6 @@ def main():
 
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
-    config.embedding_dropout = 0.1
-    config.classifier_dropout = 0.1
     model = ModernBertForSequenceClassification(config)
 
     # Define training arguments

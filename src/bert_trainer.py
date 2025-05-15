@@ -98,8 +98,6 @@ def align(examples, tokenizer, supersense=False, mode="train"):
     if supersense:
         inputs["token_labels"] = labels
     inputs["labels"] = examples["labels"]
-    if mode == "train":
-        inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(inputs["input_ids"], tokenizer)
     return inputs
 
 
