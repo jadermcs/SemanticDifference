@@ -3,8 +3,6 @@
 import argparse
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import json
 from tqdm import tqdm
 from transformers import (
@@ -13,15 +11,11 @@ from transformers import (
     TrainingArguments,
     Trainer,
     AutoConfig,
-    ModernBertPreTrainedModel,
     set_seed,
 )
-from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead
 import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
-from transformers.modeling_outputs import ModelOutput
-from dataclasses import dataclass
 from typing import Optional, Tuple
 
 # Set device
@@ -75,153 +69,15 @@ def align(examples, tokenizer):
     inputs["labels"] = examples["labels"]
     return inputs
 
-
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
     examples["sentences"] = f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}"
     return examples
 
-
-@dataclass
-class MultiTaskModelOutput(ModelOutput):
-    loss: Optional[torch.Tensor] = None
-    mlm_loss: Optional[torch.Tensor] = None
-    token_loss: Optional[torch.Tensor] = None
-    sequence_loss: Optional[torch.Tensor] = None
-    mlm_logits: Optional[torch.FloatTensor] = None
-    sequence_logits: Optional[torch.FloatTensor] = None
-    token_logits: Optional[torch.FloatTensor] = None
-    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    attentions: Optional[Tuple[torch.FloatTensor]] = None
-
-
-class CustomMultiTaskModel(ModernBertPreTrainedModel):
-    _tied_weights_keys = ["decoder.weight"]
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.config = config
-        self.num_labels = config.num_labels
-        self.model = AutoModelForMaskedLM.from_pretrained(
-            config._name_or_path, config=config
-        )  # Or your specific base model
-        if config.num_token_labels > 0:
-            self.sense_embeddings = nn.Parameter(
-                torch.empty(config.num_token_labels, config.hidden_size)
-            )
-            nn.init.xavier_uniform_(self.sense_embeddings)
-        self.drop = nn.Dropout(config.classifier_dropout)
-        self.sequence_classifier = nn.Linear(config.hidden_size, config.num_labels)
-        self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
-        self.loss_seq = nn.CrossEntropyLoss()
-        self.loss_tok = nn.BCEWithLogitsLoss()
-        self.loss_mlm = nn.CrossEntropyLoss()
-
-        self.post_init()
-
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,  # Labels for sequence classification
-        mlm_labels: Optional[torch.Tensor] = None,  # Labels for MLM
-        token_labels: Optional[torch.Tensor] = None,  # Labels for token classification
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ):
-        # 1. Get standard word embeddings
-        embed = self.model.model.embeddings
-        word_embeds = embed.tok_embeddings(input_ids)
-
-        # 2. Get sense embeddings
-        if token_labels is not None and mlm_labels is not None:
-            masked_tokens = mlm_labels == IGNORE_ID
-            masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
-            masked_token_labels = token_labels & (token_labels != IGNORE_ID) & masked_tokens
-            sense_embeds = masked_token_labels.float() @ self.sense_embeddings
-            word_embeds += sense_embeds
-
-        inputs_embeds = embed.drop(embed.norm(word_embeds))
-
-        outputs = self.model(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            labels=mlm_labels,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-
-        sequence_output = self.drop(
-            outputs.hidden_states[-1]
-        )
-
-        sequence_logits = self.sequence_classifier(
-            sequence_output[:, 0, :]
-        )  # (batch_size, num_sequence_labels)
-        token_logits = self.token_classifier(sequence_output)  # (B, L, C)
-
-        # --- Calculate Losses ---
-        loss = torch.tensor(0.0, device=sequence_output.device)
-        mlm_loss = None
-        sequence_loss = None
-        mlm_logits = None
-        token_loss = None
-
-        if mlm_labels is not None:
-            mlm_loss = outputs.loss
-            loss += mlm_loss
-        if token_labels is not None and mlm_labels is not None:
-            # Create mask for valid positions (masked tokens and non -100 labels)
-            valid_mask = token_labels != IGNORE_ID
-            masked_tokens = mlm_labels != IGNORE_ID
-            masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
-            valid_mask &= masked_tokens
-            # Apply the mask
-            token_labels_masked = token_labels[valid_mask].float()  # match logits' shape
-            masked_token_logits = token_logits[valid_mask]
-            # Compute loss
-            token_loss = self.loss_tok(masked_token_logits, token_labels_masked)
-            log_probs = F.log_softmax(masked_token_logits, dim=-1)   # shape [N, C]
-
-            # Create a mask over the allowed senses (multilabel-aware)
-            allowed_mask = token_labels_masked > 0                   # shape [N, C]
-            num_allowed = allowed_mask.sum(dim=-1, keepdim=True)  # shape [N, 1]
-            num_allowed = num_allowed.clamp(min=1)
-
-            # Calculate uniform distribution: 1 / |A(w)| for each allowed sense
-            uniform_weights = allowed_mask.float() / num_allowed     # shape [N, C]
-
-            # Compute the regularization loss per example
-            reg_loss = - (uniform_weights * log_probs).sum(dim=-1).mean()  # scalar
-            loss += token_loss + reg_loss
-        if labels is not None:
-            sequence_loss = self.loss_seq(sequence_logits.view(-1, self.num_labels), labels.view(-1))
-            loss += sequence_loss
-
-        if not return_dict:
-            output = (sequence_logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
-
-        return MultiTaskModelOutput(
-            loss=loss,
-            mlm_loss=mlm_loss,
-            token_loss=token_loss,
-            sequence_loss=sequence_loss,
-            token_logits=token_logits,
-            mlm_logits=mlm_logits,
-            sequence_logits=sequence_logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-
 def compute_metrics(pred):
     """Compute metrics for both sequence and token classification."""
     # Unpack predictions and labels
-    preds = pred.predictions["logits"]
-    labels = pred.label_ids["labels"]
+    preds, labels = pred
 
     seq_preds_argmax = preds.argmax(-1)
     seq_precision, seq_recall, seq_f1, _ = precision_recall_fscore_support(
@@ -236,18 +92,6 @@ def compute_metrics(pred):
         "seq_recall": seq_recall,
     }
     return metrics
-
-
-class MultiTaskTrainer(Trainer):
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        inputs = inputs.copy()
-        label_ids = {
-            "sequence": inputs["labels"],
-        }
-        with torch.no_grad():
-            outputs = model(**inputs, return_dict=True)
-
-        return None, outputs, label_ids
 
 
 def main():
@@ -377,7 +221,7 @@ def main():
     )
 
     # Initialize trainer
-    trainer = MultiTaskTrainer(
+    trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=datasets["train"],
