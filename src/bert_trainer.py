@@ -2,9 +2,9 @@
 # coding: utf-8
 import argparse
 
-from transformers.utils.hub import has_file
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import json
 from wordnet_utils import get_word_supersenses, NUM_SUPERSENSE_CLASSES
 from tqdm import tqdm
@@ -250,6 +250,8 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         if mlm_labels is not None:
             mlm_loss = outputs.loss
             loss += mlm_loss
+        print(token_labels)
+        print(mlm_labels)
         if token_labels is not None and mlm_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
@@ -257,13 +259,22 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
             valid_mask &= masked_tokens
             # Apply the mask
-            token_labels = token_labels[valid_mask].float()  # match logits' shape
+            token_labels_masked = token_labels[valid_mask].float()  # match logits' shape
             masked_token_logits = token_logits[valid_mask]
             # Compute loss
-            token_loss = self.loss_tok(masked_token_logits, token_labels)
+            token_loss = self.loss_tok(masked_token_logits, token_labels_masked)
+            log_probs = F.log_softmax(masked_token_logits, dim=-1)   # shape [N, C]
 
-            loss_reg = torch.mean(-(masked_token_logits / token_labels.sum(dim=-1)).sum())
-            loss += token_loss + loss_reg
+            # Create a mask over the allowed senses (multilabel-aware)
+            allowed_mask = token_labels_masked > 0                   # shape [N, C]
+            num_allowed = allowed_mask.sum(dim=1, keepdim=True).clamp(min=1)  # shape [N, 1]
+
+            # Calculate uniform distribution: 1 / |A(w)| for each allowed sense
+            uniform_weights = allowed_mask.float() / num_allowed     # shape [N, C]
+
+            # Compute the regularization loss per example
+            reg_loss = - (uniform_weights * log_probs).sum(dim=1).mean()  # scalar
+            loss += token_loss + reg_loss
         if labels is not None:
             sequence_loss = self.loss_seq(sequence_logits.view(-1, self.num_labels), labels.view(-1))
             loss += sequence_loss
@@ -428,13 +439,13 @@ def main():
 
     datasets = datasets.map(
         preprocess_function,
-        fn_kwargs={"tokenizer": tokenizer},
+        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
         num_proc=4,
     )
 
     datasets["train"] = datasets["train"].map(
         align,
-        fn_kwargs={"tokenizer": tokenizer},
+        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
         batched=True,
         remove_columns=datasets["train"].column_names,
         num_proc=4,
