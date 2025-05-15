@@ -215,8 +215,8 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
                 masked_tokens = mlm_labels == IGNORE_ID
                 masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
                 valid_mask &= masked_tokens
-            masked_token_labels = token_labels * valid_mask
-            sense_embeds = masked_token_labels @ self.sense_embeddings
+            masked_token_labels = token_labels & valid_mask
+            sense_embeds = masked_token_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
 
         inputs_embeds = embed.drop(embed.norm(word_embeds))
@@ -390,7 +390,7 @@ def main():
         "--wandb_run_name", type=str, default=None, help="Weights & Biases run name"
     )
     parser.add_argument(
-        "--batch_size", type=int, default=32, help="Batch size for training"
+        "--batch_size", type=int, default=16, help="Batch size for training"
     )
     parser.add_argument(
         "--fp16", action="store_true", default=True, help="Use FP16 precision"
