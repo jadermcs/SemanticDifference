@@ -17,7 +17,7 @@ from transformers import (
     ModernBertPreTrainedModel,
     set_seed,
 )
-from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead, _unpad_modernbert_input
+from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead
 import wandb
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
@@ -262,13 +262,14 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
 
             # Create a mask over the allowed senses (multilabel-aware)
             allowed_mask = token_labels_masked > 0                   # shape [N, C]
-            num_allowed = allowed_mask.sum(dim=1, keepdim=True).clamp(min=1)  # shape [N, 1]
+            num_allowed = allowed_mask.sum(dim=-1, keepdim=True)  # shape [N, 1]
+            num_allowed = num_allowed.clamp(min=1)
 
             # Calculate uniform distribution: 1 / |A(w)| for each allowed sense
             uniform_weights = allowed_mask.float() / num_allowed     # shape [N, C]
 
             # Compute the regularization loss per example
-            reg_loss = - (uniform_weights * log_probs).sum(dim=1).mean()  # scalar
+            reg_loss = - (uniform_weights * log_probs).sum(dim=-1).mean()  # scalar
             loss += token_loss + reg_loss
         if labels is not None:
             sequence_loss = self.loss_seq(sequence_logits.view(-1, self.num_labels), labels.view(-1))
