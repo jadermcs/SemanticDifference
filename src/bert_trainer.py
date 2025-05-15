@@ -211,13 +211,10 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         word_embeds = embed.tok_embeddings(input_ids)
 
         # 2. Get sense embeddings
-        if token_labels is not None:
-            valid_mask = token_labels != IGNORE_ID
-            if mlm_labels is not None:
-                masked_tokens = mlm_labels == IGNORE_ID
-                masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
-                valid_mask &= masked_tokens
-            masked_token_labels = token_labels & valid_mask
+        if token_labels is not None and mlm_labels is not None:
+            masked_tokens = mlm_labels == IGNORE_ID
+            masked_tokens = masked_tokens.unsqueeze(-1).expand(-1, -1, self.config.num_token_labels)
+            masked_token_labels = token_labels & (token_labels != IGNORE_ID) & masked_tokens
             sense_embeds = masked_token_labels.float() @ self.sense_embeddings
             word_embeds += sense_embeds
 
@@ -250,8 +247,6 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         if mlm_labels is not None:
             mlm_loss = outputs.loss
             loss += mlm_loss
-        print(token_labels)
-        print(mlm_labels)
         if token_labels is not None and mlm_labels is not None:
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
@@ -439,13 +434,17 @@ def main():
 
     datasets = datasets.map(
         preprocess_function,
-        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
+        fn_kwargs={"tokenizer": tokenizer},
         num_proc=4,
     )
 
     datasets["train"] = datasets["train"].map(
         align,
-        fn_kwargs={"tokenizer": tokenizer, "supersense": args.supersense},
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "supersense": args.supersense,
+            "mode": "train",
+        },
         batched=True,
         remove_columns=datasets["train"].column_names,
         num_proc=4,
