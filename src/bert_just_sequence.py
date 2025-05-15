@@ -6,16 +6,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import json
-from wordnet_utils import get_word_supersenses, NUM_SUPERSENSE_CLASSES
 from tqdm import tqdm
 from transformers import (
-    AutoModelForMaskedLM,
+    ModernBertForSequenceClassification,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
     AutoConfig,
     ModernBertPreTrainedModel,
-    DataCollatorForLanguageModeling,
     set_seed,
 )
 from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead
@@ -73,33 +71,9 @@ def tokenize(sentence, tokenizer):
         return_tensors="pt"
     )
 
-def align(examples, tokenizer, supersense=False, mode="train"):
+def align(examples, tokenizer):
     inputs = tokenize(examples["sentences"], tokenizer)
-    ignore = [IGNORE_ID] * NUM_SUPERSENSE_CLASSES
-    labels = []
-    for i, offsets in enumerate(inputs["offset_mapping"]):
-        text = examples["sentences"][i]
-        text_len = len(text)
-        label_ids = []
-        current_word = ""
-        for offset in offsets:
-            start, end = offset
-            word = text[start:end]
-            current_word += word
-            if end < text_len and not text[end].isalpha():
-                # Word is striped inside helper function
-                get_supersenses = get_word_supersenses(current_word)
-                label_ids.append(get_supersenses if get_supersenses else ignore)
-                current_word = ""
-            else:
-                label_ids.append(ignore)
-        labels.append(label_ids)
-
-    if supersense:
-        inputs["token_labels"] = labels
     inputs["labels"] = examples["labels"]
-    if mode == "train":
-        inputs["input_ids"], inputs["mlm_labels"] = mask_tokens(inputs["input_ids"], tokenizer)
     return inputs
 
 
@@ -317,18 +291,6 @@ class MultiTaskTrainer(Trainer):
         return None, predictions, label_ids
 
 
-class CustomDataCollatorForMLM(DataCollatorForLanguageModeling):
-    def __call__(self, examples):
-        tmp = examples["labels"]
-        batch = super().__call__(examples)
-
-        # Example modification: Set all labels that are -100 to 0 (not typical but illustrative)
-        # Normally, -100 is used to ignore loss on non-masked tokens
-        batch["mlm_labels"] = batch["labels"]
-        batch["labels"] = tmp
-
-        return batch
-
 def main():
     parser = argparse.ArgumentParser(
         description="Train a MLM model for difference classification"
@@ -336,7 +298,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="FacebookAI/roberta-base",
+        default="answerdotai/ModernBERT-base",
         help="Pre-trained model to use",
     )
     parser.add_argument(
@@ -407,8 +369,6 @@ def main():
         align,
         fn_kwargs={
             "tokenizer": tokenizer,
-            "supersense": args.supersense,
-            "mode": "train",
         },
         batched=True,
         remove_columns=datasets["train"].column_names,
@@ -419,8 +379,6 @@ def main():
         align,
         fn_kwargs={
             "tokenizer": tokenizer,
-            "supersense": args.supersense,
-            "mode": "test",
         },
         batched=True,
         remove_columns=datasets["test"].column_names,
@@ -429,17 +387,9 @@ def main():
 
     # Initialize model
     config = AutoConfig.from_pretrained(args.model, num_labels=2)
-    config.num_token_labels = NUM_SUPERSENSE_CLASSES if args.supersense else 0
     config.embedding_dropout = 0.1
     config.classifier_dropout = 0.1
-    model = CustomMultiTaskModel(config)
-
-    data_collator = CustomDataCollatorForMLM(
-        tokenizer=tokenizer,
-        mlm=True,
-        mlm_probability=MLM_PROBABILITY,
-    )
-
+    model = ModernBertForSequenceClassification(config)
 
     # Define training arguments
     training_args = TrainingArguments(
@@ -471,7 +421,6 @@ def main():
         train_dataset=datasets["train"],
         eval_dataset=datasets["test"],
         compute_metrics=compute_metrics,
-        data_collator=data_collator,
     )
 
     # Train the model
