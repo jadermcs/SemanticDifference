@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 import argparse
+
+from transformers.utils.hub import has_file
 import torch
 import torch.nn as nn
 import json
@@ -259,8 +261,9 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             masked_token_logits = token_logits[valid_mask]
             # Compute loss
             token_loss = self.loss_tok(masked_token_logits, token_labels)
-            uniform_loss = masked_token_logits.sigmoid().sum() / token_labels.sum()
-            loss += token_loss + uniform_loss
+
+            loss_reg = torch.mean(-(masked_token_logits / token_labels.sum(dim=-1)).sum())
+            loss += token_loss + loss_reg
         if labels is not None:
             sequence_loss = self.loss_seq(sequence_logits.view(-1, self.num_labels), labels.view(-1))
             loss += sequence_loss
