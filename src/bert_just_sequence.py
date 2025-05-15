@@ -182,8 +182,8 @@ def main():
     )
 
     # Initialize model
-    config = AutoConfig.from_pretrained(args.model, num_labels=2)
-    model = ModernBertForSequenceClassification(config)
+    model = ModernBertForSequenceClassification.from_pretrained(args.model, num_labels=2)
+    model.config.classifier_pooling = "cls"
 
     # Define training arguments
     training_args = TrainingArguments(
