@@ -171,23 +171,13 @@ def main():
         num_proc=4,
     )
 
-    datasets["train"] = datasets["train"].map(
+    datasets = datasets.map(
         align,
         fn_kwargs={
             "tokenizer": tokenizer,
         },
         batched=True,
         remove_columns=datasets["train"].column_names,
-        num_proc=4,
-    )
-    # During test we show all the tokens however we don't give supersense embeddings
-    datasets["test"] = datasets["test"].map(
-        align,
-        fn_kwargs={
-            "tokenizer": tokenizer,
-        },
-        batched=True,
-        remove_columns=datasets["test"].column_names,
         num_proc=4,
     )
 
