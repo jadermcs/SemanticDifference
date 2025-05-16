@@ -121,7 +121,6 @@ tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column
 block_size = 128
 
 def group_texts(examples):
-    print(examples)
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     result = {
@@ -135,9 +134,9 @@ tokenized_dataset = tokenized_dataset.map(group_texts, batched=True, num_proc=8)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = DiffusionMLM(vocab_size).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
 
-progress_bar = trange(500, desc="Training", leave=True)
+progress_bar = trange(5000, desc="Training", leave=True)
 
 @torch.no_grad()
 def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
