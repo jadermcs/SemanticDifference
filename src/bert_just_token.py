@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 import argparse
-import os
-os.environ["WANDB_MODE"] = "disabled"
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
