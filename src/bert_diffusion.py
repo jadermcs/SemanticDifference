@@ -71,6 +71,61 @@ def corrupt_tokens(x, t, mask_token_id):
 
     return x_corrupt
 
+
+def get_rotary_embedding(seq_len, dim, device):
+    inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+    pos = torch.arange(seq_len, device=device).type_as(inv_freq)
+    sinusoid_inp = torch.einsum("i,j->ij", pos, inv_freq)
+    return torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+
+def apply_rotary_emb(q, k, sin, cos):
+    q1, q2 = q[..., ::2], q[..., 1::2]
+    k1, k2 = k[..., ::2], k[..., 1::2]
+    q_rotated = torch.cat([q1 * cos + q2 * sin, q2 * cos - q1 * sin], dim=-1)
+    k_rotated = torch.cat([k1 * cos + k2 * sin, k2 * cos - k1 * sin], dim=-1)
+    return q_rotated, k_rotated
+
+class RotaryMultiheadAttention(nn.Module):
+    def __init__(self, dim, n_heads):
+        super().__init__()
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+        self.qkv_proj = nn.Linear(dim, 3 * dim)
+        self.out_proj = nn.Linear(dim, dim)
+
+    def forward(self, x):
+        B, L, D = x.shape
+        qkv = self.qkv_proj(x).reshape(B, L, 3, self.n_heads, self.head_dim)
+        q, k, v = qkv.unbind(dim=2)  # (B, L, H, D_head)
+
+        sin, cos = get_rotary_embedding(L, self.head_dim, x.device)
+        sin, cos = sin[None, :, None, :], cos[None, :, None, :]  # (1, L, 1, D//2)
+
+        q, k = apply_rotary_emb(q, k, sin, cos)
+
+        attn_scores = torch.matmul(q, k.transpose(-1, -2)) / (self.head_dim ** 0.5)
+        attn_probs = torch.softmax(attn_scores, dim=-1)
+        out = torch.matmul(attn_probs, v)
+        out = out.transpose(1, 2).reshape(B, L, D)
+        return self.out_proj(out)
+
+class DiTBlock(nn.Module):
+    def __init__(self, dim, n_heads):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = RotaryMultiheadAttention(embed_dim=dim, num_heads=n_heads)
+        self.norm2 = nn.LayerNorm(dim)
+        self.ff = nn.Sequential(
+            nn.Linear(dim, 4 * dim),
+            nn.GELU(),
+            nn.Linear(4 * dim, dim),
+        )
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        x = x + self.ff(self.norm2(x))
+        return x
+
 class TimestepEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -86,37 +141,19 @@ class TimestepEmbedding(nn.Module):
         emb = torch.cat([emb.sin(), emb.cos()], dim=1)
         return self.linear2(self.act(self.linear1(emb)))
 
-
-class DiTBlock(nn.Module):
-    def __init__(self, dim, n_heads):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=n_heads, batch_first=True)
-        self.norm2 = nn.LayerNorm(dim)
-        self.ff = nn.Sequential(
-            nn.Linear(dim, 4 * dim),
-            nn.GELU(),
-            nn.Linear(4 * dim, dim),
-        )
-
-    def forward(self, x):
-        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
-        x = x + self.ff(self.norm2(x))
-        return x
-
 class DiTForMLM(nn.Module):
     def __init__(self, vocab_size, seq_len, dim, depth, n_heads):
         super().__init__()
         self.token_emb = nn.Embedding(vocab_size, dim)
-        self.pos_emb = nn.Parameter(torch.randn(1, seq_len, dim))
         self.time_mlp = TimestepEmbedding(dim)
         self.transformer_blocks = nn.ModuleList([DiTBlock(dim, n_heads) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.output = nn.Linear(dim, vocab_size)
+        self.seq_len = seq_len
 
     def forward(self, x_t, t):
         B, L = x_t.shape
-        x = self.token_emb(x_t) + self.pos_emb[:, :L, :]
+        x = self.token_emb(x_t)
         t_emb = self.time_mlp(t).unsqueeze(1)  # (B, 1, D)
         x = x + t_emb
 
