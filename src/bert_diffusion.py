@@ -187,8 +187,8 @@ def tokenize_function(example):
     tokens = tokenizer(example["text"], truncation=True)
     return tokens
 
-#dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train").select(range(100_000))
-dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train").select(range(100_000))
+#dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 
 tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names, batched=True, num_proc=8)
 
