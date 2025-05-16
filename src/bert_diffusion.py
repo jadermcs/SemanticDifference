@@ -148,7 +148,7 @@ def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
         t = torch.full((B,), t_val, dtype=torch.long, device=device)
         logits = model(x_t, t)
         x_t = logits.argmax(dim=-1)
-        print(tokenizer.batch_decode(x_t, skip_special_tokens=True))
+        print(tokenizer.batch_decode(x_t, skip_special_tokens=True), sep='', end='', flush=True)
 
     return x_t
 
