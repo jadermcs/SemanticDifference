@@ -76,8 +76,8 @@ class DiffusionMLM(nn.Module):
         super().__init__()
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
         self.time_embed = nn.Embedding(max_timesteps, hidden_dim)
-        encoder = nn.TransformerEncoderLayer(hidden_dim, 8)
-        self.transformer = nn.TransformerEncoder(encoder, num_layers=6)
+        encoder = nn.TransformerEncoderLayer(hidden_dim, 12)
+        self.transformer = nn.TransformerEncoder(encoder, num_layers=12)
         self.output = nn.Linear(hidden_dim, vocab_size)
 
     def forward(self, x_t, t):
@@ -109,13 +109,13 @@ vocab_size = tokenizer.vocab_size
 mask_token_id = tokenizer.mask_token_id
 
 def tokenize_function(example):
-    tokens = tokenizer(example["text"], padding="max_length", truncation=True, max_length=32, return_tensors="pt")
+    tokens = tokenizer(example["text"], padding="max_length", truncation=True, max_length=128, return_tensors="pt")
     return {"input_ids": tokens["input_ids"].squeeze(0)}
 
-# dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train")
-dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train").select(range(100_000))
+#dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 
-tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names)
+tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names, num_proc=8)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = DiffusionMLM(vocab_size).to(device)
@@ -123,8 +123,23 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
 progress_bar = trange(5000, desc="Training", leave=True)
 
-for step in progress_bar:
-    batch = tokenized_dataset.shuffle(seed=42).select(range(32))
+@torch.no_grad()
+def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
+    B = 1
+    device = next(model.parameters()).device
+    start = tokenizer("I like", return_tensors="pt")["input_ids"][0,:-1]
+    append = torch.full((seq_len,), mask_token_id, dtype=torch.long)
+    x_t = torch.cat([start, append]).unsqueeze(0).to(device)
+
+    for t_val in reversed(range(1, num_steps)):
+        t = torch.full((B,), t_val, dtype=torch.long, device=device)
+        logits = model(x_t, t)
+        x_t = logits.argmax(dim=-1)
+        print(tokenizer.batch_decode(x_t, skip_special_tokens=False), end='\r')
+    print("")
+
+for i, step in enumerate(progress_bar):
+    batch = tokenized_dataset.shuffle(seed=42).select(range(8))
     x_0 = torch.tensor(batch["input_ids"]).to(device)
     t = torch.randint(1, 1000, (x_0.size(0),), device=device)
     x_t = corrupt_tokens(x_0, t, mask_token_id).to(device)
@@ -135,21 +150,8 @@ for step in progress_bar:
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    if i % 100 == 0 and i > 0:
+        sample_sequence(model, seq_len=20, mask_token_id=mask_token_id)
 
     progress_bar.set_postfix(loss=f"{loss.item():.4f}")
 
-@torch.no_grad()
-def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
-    B = 1
-    device = next(model.parameters()).device
-    x_t = torch.full((B, seq_len), mask_token_id, dtype=torch.long, device=device)
-
-    for t_val in reversed(range(1, num_steps)):
-        t = torch.full((B,), t_val, dtype=torch.long, device=device)
-        logits = model(x_t, t)
-        x_t = logits.argmax(dim=-1)
-        print(tokenizer.batch_decode(x_t, skip_special_tokens=True))
-
-    return x_t
-
-sampled_ids = sample_sequence(model, seq_len=32, mask_token_id=mask_token_id)
