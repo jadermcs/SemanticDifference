@@ -17,6 +17,7 @@ from transformers import (
     set_seed,
 )
 import wandb
+from transformers.models.modernbert.modeling_modernbert import ModernBertPredictionHead
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from datasets import Dataset, DatasetDict
 from transformers.modeling_outputs import ModelOutput
@@ -120,7 +121,8 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
         super().__init__(config)
         self.config = config
         self.num_labels = config.num_labels
-        self.model = AutoModel.from_config(config)  # Or your specific base model
+        self.model = AutoModel(config)  # Or your specific base model
+        self.head = ModernBertPredictionHead(config)
         self.drop = nn.Dropout(config.classifier_dropout)
         self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
         self.loss_tok = nn.BCEWithLogitsLoss()
@@ -148,7 +150,8 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             output_hidden_states=True,
             return_dict=True,
         )
-        sequence_output = self.drop(outputs[0])
+        sequence_output = self.head(outputs[0])
+        sequence_output = self.drop(sequence_output)
 
         token_logits = self.token_classifier(sequence_output)  # (B, L, C)
 
