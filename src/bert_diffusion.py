@@ -76,7 +76,7 @@ def get_rotary_embedding(seq_len, dim, device):
     inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
     pos = torch.arange(seq_len, device=device).type_as(inv_freq)
     sinusoid_inp = torch.einsum("i,j->ij", pos, inv_freq)
-    return torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+    return torch.sin(sinusoid_inp).to(device), torch.cos(sinusoid_inp).to(device)
 
 def apply_rotary_emb(q, k, sin, cos):
     q1, q2 = q[..., ::2], q[..., 1::2]
