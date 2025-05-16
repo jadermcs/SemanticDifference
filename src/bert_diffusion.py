@@ -122,7 +122,7 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, x):
-        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        x = x + self.attn(self.norm1(x))
         x = x + self.ff(self.norm2(x))
         return x
 
