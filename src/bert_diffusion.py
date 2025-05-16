@@ -113,7 +113,7 @@ class DiTBlock(nn.Module):
     def __init__(self, dim, n_heads):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = RotaryMultiheadAttention(embed_dim=dim, num_heads=n_heads)
+        self.attn = RotaryMultiheadAttention(dim, n_heads)
         self.norm2 = nn.LayerNorm(dim)
         self.ff = nn.Sequential(
             nn.Linear(dim, 4 * dim),
