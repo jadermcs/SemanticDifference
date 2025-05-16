@@ -4,6 +4,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers import BertTokenizer
+from datasets import load_dataset
+from tqdm import trange
+
+MLM_PROBABILITY=0.3
+NUM_EPOCHS=3
 
 def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     """
@@ -53,38 +59,26 @@ def mask_tokens(inputs, tokenizer, mlm_probability=MLM_PROBABILITY):
     # The rest of the time ((1-random_replace_prob-mask_replace_prob)% of the time) we keep the masked input tokens unchanged
     return inputs, labels
 
-def corrupt_tokens(x, vocab_size, t, mask_token_id, strategy="mask"):
-    """
-    Corrupt input tokens with a discrete noising schedule.
-    x: [B, L] input token ids
-    t: [B] timestep ids
-    """
+
+def corrupt_tokens(x, t, mask_token_id):
     B, L = x.shape
     x_corrupt = x.clone()
 
     for i in range(B):
-        noise_prob = t[i].item() / 1000  # e.g. 1000 steps total
-        mask = torch.rand(L) < noise_prob
-
-        if strategy == "mask":
-            x_corrupt[i][mask] = mask_token_id
-        elif strategy == "random":
-            x_corrupt[i][mask] = torch.randint(0, vocab_size, (mask.sum(),))
-        elif strategy == "mixed":
-            use_mask = torch.rand(L) < 0.5
-            x_corrupt[i][mask & use_mask] = mask_token_id
-            x_corrupt[i][mask & ~use_mask] = torch.randint(0, vocab_size, (mask.sum(),))
+        p = t[i].item() / 1000
+        mask = torch.rand(L) < p
+        x_corrupt[i][mask] = mask_token_id
 
     return x_corrupt
 
 
 class DiffusionMLM(nn.Module):
-    def __init__(self, vocab_size, hidden_dim=256, num_layers=6, max_timesteps=1000):
+    def __init__(self, vocab_size, hidden_dim=256, max_timesteps=1000):
         super().__init__()
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
         self.time_embed = nn.Embedding(max_timesteps, hidden_dim)
-        encoder_layer = nn.TransformerEncoderLayer(hidden_dim, nhead=8)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        encoder = nn.TransformerEncoderLayer(hidden_dim, 8)
+        self.transformer = nn.TransformerEncoder(encoder, num_layers=6)
         self.output = nn.Linear(hidden_dim, vocab_size)
 
     def forward(self, x_t, t):
@@ -92,15 +86,14 @@ class DiffusionMLM(nn.Module):
         token_emb = self.token_embed(x_t)
         time_emb = self.time_embed(t).unsqueeze(1).expand(B, L, -1)
         h = token_emb + time_emb
-        h = self.transformer(h.permute(1, 0, 2))  # Transformer expects [L, B, D]
-        logits = self.output(h.permute(1, 0, 2))
-        return logits
+        h = self.transformer(h.permute(1, 0, 2))  # L, B, D
+        return self.output(h.permute(1, 0, 2))    # B, L, V
 
 
 def train_step(model, optimizer, x_0, vocab_size, mask_token_id, device):
     B, L = x_0.shape
     t = torch.randint(1, 1000, (B,), device=device)
-    x_t = corrupt_tokens(x_0, vocab_size, t, mask_token_id).to(device)
+    x_t = corrupt_tokens(x_0, t, mask_token_id).to(device)
 
     logits = model(x_t, t)
     loss = F.cross_entropy(logits.view(-1, vocab_size), x_0.view(-1))
@@ -111,44 +104,53 @@ def train_step(model, optimizer, x_0, vocab_size, mask_token_id, device):
     return loss.item()
 
 
-vocab_size = 30522  # e.g., BERT's vocab size
-mask_token_id = 103  # [MASK] token
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+
+vocab_size = tokenizer.vocab_size
+mask_token_id = tokenizer.mask_token_id
+
+def tokenize_function(example):
+    tokens = tokenizer(example["text"], padding="max_length", truncation=True, max_length=32, return_tensors="pt")
+    return {"input_ids": tokens["input_ids"].squeeze(0)}
+
+# dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train")
+dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+
+tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 model = DiffusionMLM(vocab_size).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
-for epoch in range(num_epochs):
-    for batch in dataloader:
-        x_0 = batch["input_ids"].to(device)
-        loss = train_step(model, optimizer, x_0, vocab_size, mask_token_id, device)
-        print(f"Loss: {loss:.4f}")
+progress_bar = trange(5000, desc="Training", leave=True)
 
+for step in progress_bar:
+    batch = tokenized_dataset.shuffle(seed=42).select(range(32))
+    x_0 = torch.tensor(batch["input_ids"]).to(device)
+    t = torch.randint(1, 1000, (x_0.size(0),), device=device)
+    x_t = corrupt_tokens(x_0, t, mask_token_id).to(device)
+
+    logits = model(x_t, t)
+    loss = F.cross_entropy(logits.view(-1, vocab_size), x_0.view(-1))
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    progress_bar.set_postfix(loss=f"{loss.item():.4f}")
 
 @torch.no_grad()
-def sample_sequence(model, seq_len, vocab_size, mask_token_id, num_steps=1000, strategy="argmax"):
-    """
-    Generate a sequence by reverse diffusion.
-    """
+def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
+    B = 1
     device = next(model.parameters()).device
-    B = 1  # batch size
     x_t = torch.full((B, seq_len), mask_token_id, dtype=torch.long, device=device)
 
-    for t_val in reversed(range(1, num_steps + 1)):
+    for t_val in reversed(range(1, num_steps)):
         t = torch.full((B,), t_val, dtype=torch.long, device=device)
-        logits = model(x_t, t)  # [B, L, V]
+        logits = model(x_t, t)
+        x_t = logits.argmax(dim=-1)
+        print(tokenizer.batch_decode(x_t, skip_special_tokens=True))
 
-        if strategy == "argmax":
-            x_t = logits.argmax(dim=-1)
-        elif strategy == "sample":
-            probs = torch.softmax(logits, dim=-1)
-            x_t = torch.multinomial(probs.view(-1, vocab_size), 1).view(B, seq_len)
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+    return x_t
 
-    return x_t  # final denoised tokens
-
-
-from transformers import BertTokenizer
-
-tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-generated_ids = sample_sequence(model, seq_len=20, vocab_size=tokenizer.vocab_size, mask_token_id=tokenizer.mask_token_id)
-print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
+sampled_ids = sample_sequence(model, seq_len=32, mask_token_id=mask_token_id)
