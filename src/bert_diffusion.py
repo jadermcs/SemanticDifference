@@ -72,7 +72,7 @@ def corrupt_tokens(x, t, mask_token_id):
 
 
 class DiffusionMLM(nn.Module):
-    def __init__(self, vocab_size, hidden_dim=256, max_timesteps=1000):
+    def __init__(self, vocab_size, hidden_dim=768, max_timesteps=1000):
         super().__init__()
         self.token_embed = nn.Embedding(vocab_size, hidden_dim)
         self.time_embed = nn.Embedding(max_timesteps, hidden_dim)
@@ -108,20 +108,35 @@ tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 vocab_size = tokenizer.vocab_size
 mask_token_id = tokenizer.mask_token_id
 
+
 def tokenize_function(example):
-    tokens = tokenizer(example["text"], padding="max_length", truncation=True, max_length=32, return_tensors="pt")
-    return {"input_ids": tokens["input_ids"].squeeze(0)}
+    tokens = tokenizer(example["text"])
+    return tokens
 
 # dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train")
 dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 
-tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names)
+tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names, batched=True, num_proc=8)
+
+block_size = 128
+
+def group_texts(examples):
+    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    result = {
+        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+        for k, t in concatenated_examples.items()
+    }
+    result["labels"] = result["input_ids"].copy()
+    return result
+
+tokenized_dataset = dataset.map(group_texts, batched=True, num_proc=8)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = DiffusionMLM(vocab_size).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
-progress_bar = trange(5000, desc="Training", leave=True)
+progress_bar = trange(500, desc="Training", leave=True)
 
 for step in progress_bar:
     batch = tokenized_dataset.shuffle(seed=42).select(range(32))
@@ -148,8 +163,8 @@ def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
         t = torch.full((B,), t_val, dtype=torch.long, device=device)
         logits = model(x_t, t)
         x_t = logits.argmax(dim=-1)
-        print(tokenizer.batch_decode(x_t, skip_special_tokens=True), sep='', end='', flush=True)
 
     return x_t
 
 sampled_ids = sample_sequence(model, seq_len=32, mask_token_id=mask_token_id)
+print(tokenizer.batch_decode(sampled_ids, skip_special_tokens=True))
