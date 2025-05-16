@@ -110,7 +110,7 @@ mask_token_id = tokenizer.mask_token_id
 
 
 def tokenize_function(example):
-    tokens = tokenizer(example["text"])
+    tokens = tokenizer(example["text"], truncation=True)
     return tokens
 
 dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train").select(range(100_000))
@@ -121,6 +121,7 @@ tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column
 block_size = 128
 
 def group_texts(examples):
+    print(examples)
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     result = {
@@ -130,7 +131,7 @@ def group_texts(examples):
     result["labels"] = result["input_ids"].copy()
     return result
 
-tokenized_dataset = dataset.map(group_texts, batched=True, num_proc=8)
+tokenized_dataset = tokenized_dataset.map(group_texts, batched=True, num_proc=8)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = DiffusionMLM(vocab_size).to(device)
@@ -154,7 +155,7 @@ def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
     print("")
 
 for i, step in enumerate(progress_bar):
-    batch = tokenized_dataset.shuffle(seed=42).select(range(8))
+    batch = tokenized_dataset.shuffle(seed=42).select(range(32))
     x_0 = torch.tensor(batch["input_ids"]).to(device)
     t = torch.randint(1, 1000, (x_0.size(0),), device=device)
     x_t = corrupt_tokens(x_0, t, mask_token_id).to(device)
@@ -169,3 +170,5 @@ for i, step in enumerate(progress_bar):
         sample_sequence(model, seq_len=20, mask_token_id=mask_token_id)
 
     progress_bar.set_postfix(loss=f"{loss.item():.4f}")
+
+sample_sequence(model, seq_len=20, mask_token_id=mask_token_id)
