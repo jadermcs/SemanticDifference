@@ -138,20 +138,43 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
 
 progress_bar = trange(5000, desc="Training", leave=True)
 
+
 @torch.no_grad()
-def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
-    B = 1
+def sample_sequence(model, tokenizer, seq_len, mask_token_id, num_steps=1000, temperature=1.0):
     device = next(model.parameters()).device
-    start = tokenizer("I like", return_tensors="pt")["input_ids"][0,:-1]
-    append = torch.full((seq_len,), mask_token_id, dtype=torch.long)
-    x_t = torch.cat([start, append]).unsqueeze(0).to(device)
+    B = 1
+
+    # Starting prompt
+    start = tokenizer("I like", return_tensors="pt")["input_ids"][0, :-1]
+    append_len = seq_len
+    x_t = torch.full((B, append_len), mask_token_id, dtype=torch.long, device=device)
+
+    # Full sequence: start + to-be-generated
+    x_t = torch.cat([start.unsqueeze(0).to(device), x_t], dim=1)  # (1, start_len + seq_len)
+    total_len = x_t.size(1)
 
     for t_val in reversed(range(1, num_steps)):
         t = torch.full((B,), t_val, dtype=torch.long, device=device)
-        logits = model(x_t, t)
-        x_t = logits.argmax(dim=-1)
+
+        # Model predicts logits
+        logits = model(x_t, t)  # (B, L, vocab)
+        probs = F.softmax(logits / temperature, dim=-1)
+
+        # Sample new tokens from probabilities
+        sampled_tokens = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1).view(B, total_len)
+
+        # Gradual denoising:
+        # At early steps, keep most tokens noisy; at later steps, keep predictions
+        mask_ratio = t_val / num_steps
+        mask = torch.bernoulli(torch.full(x_t.shape, mask_ratio, device=device)).bool()
+
+        # Only update tokens where mask == 1
+        x_t = torch.where(mask, sampled_tokens, x_t)
+
         print(tokenizer.batch_decode(x_t, skip_special_tokens=False), end='\r')
-    print("")
+
+    print("\nFinal Output:", tokenizer.decode(x_t[0], skip_special_tokens=True))
+    return x_t
 
 for i, step in enumerate(progress_bar):
     batch = tokenized_dataset.shuffle(seed=42).select(range(32))
