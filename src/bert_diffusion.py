@@ -165,7 +165,7 @@ for i, step in enumerate(progress_bar):
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    if i % 100 == 0 and i > 0:
+    if i % 500 == 0 and i > 0:
         sample_sequence(model, seq_len=20, mask_token_id=mask_token_id)
 
     progress_bar.set_postfix(loss=f"{loss.item():.4f}")
