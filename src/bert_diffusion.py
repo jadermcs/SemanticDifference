@@ -140,7 +140,7 @@ progress_bar = trange(5000, desc="Training", leave=True)
 
 
 @torch.no_grad()
-def sample_sequence(model, tokenizer, seq_len, mask_token_id, num_steps=1000, temperature=1.0):
+def sample_sequence(model, seq_len, mask_token_id, num_steps=1000, temperature=1.0):
     device = next(model.parameters()).device
     B = 1
 
