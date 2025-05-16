@@ -121,7 +121,6 @@ tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column
 block_size = 128
 
 def group_texts(examples):
-    print(examples)
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     result = {
