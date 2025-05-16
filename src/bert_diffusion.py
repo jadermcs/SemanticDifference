@@ -169,19 +169,3 @@ for i, step in enumerate(progress_bar):
         sample_sequence(model, seq_len=20, mask_token_id=mask_token_id)
 
     progress_bar.set_postfix(loss=f"{loss.item():.4f}")
-
-@torch.no_grad()
-def sample_sequence(model, seq_len, mask_token_id, num_steps=1000):
-    B = 1
-    device = next(model.parameters()).device
-    x_t = torch.full((B, seq_len), mask_token_id, dtype=torch.long, device=device)
-
-    for t_val in reversed(range(1, num_steps)):
-        t = torch.full((B,), t_val, dtype=torch.long, device=device)
-        logits = model(x_t, t)
-        x_t = logits.argmax(dim=-1)
-
-    return x_t
-
-sampled_ids = sample_sequence(model, seq_len=32, mask_token_id=mask_token_id)
-print(tokenizer.batch_decode(sampled_ids, skip_special_tokens=True))
