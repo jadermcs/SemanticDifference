@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from transformers import BertTokenizer
 from datasets import load_dataset
 from tqdm import trange
+import math
 
 MLM_PROBABILITY=0.3
 NUM_EPOCHS=3
@@ -70,24 +71,60 @@ def corrupt_tokens(x, t, mask_token_id):
 
     return x_corrupt
 
-
-class DiffusionMLM(nn.Module):
-    def __init__(self, vocab_size, hidden_dim=768, max_timesteps=1000):
+class TimestepEmbedding(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        self.token_embed = nn.Embedding(vocab_size, hidden_dim)
-        self.time_embed = nn.Embedding(max_timesteps, hidden_dim)
-        encoder = nn.TransformerEncoderLayer(hidden_dim, 12)
-        self.transformer = nn.TransformerEncoder(encoder, num_layers=12)
-        self.output = nn.Linear(hidden_dim, vocab_size)
+        self.linear1 = nn.Linear(dim, dim)
+        self.act = nn.SiLU()
+        self.linear2 = nn.Linear(dim, dim)
+
+    def forward(self, t):
+        half_dim = self.linear1.in_features // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat([emb.sin(), emb.cos()], dim=1)
+        return self.linear2(self.act(self.linear1(emb)))
+
+
+class DiTBlock(nn.Module):
+    def __init__(self, dim, n_heads):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=n_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(dim)
+        self.ff = nn.Sequential(
+            nn.Linear(dim, 4 * dim),
+            nn.GELU(),
+            nn.Linear(4 * dim, dim),
+        )
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        x = x + self.ff(self.norm2(x))
+        return x
+
+class DiTForMLM(nn.Module):
+    def __init__(self, vocab_size, seq_len, dim, depth, n_heads):
+        super().__init__()
+        self.token_emb = nn.Embedding(vocab_size, dim)
+        self.pos_emb = nn.Parameter(torch.randn(1, seq_len, dim))
+        self.time_mlp = TimestepEmbedding(dim)
+        self.transformer_blocks = nn.ModuleList([DiTBlock(dim, n_heads) for _ in range(depth)])
+        self.norm = nn.LayerNorm(dim)
+        self.output = nn.Linear(dim, vocab_size)
 
     def forward(self, x_t, t):
         B, L = x_t.shape
-        token_emb = self.token_embed(x_t)
-        time_emb = self.time_embed(t).unsqueeze(1).expand(B, L, -1)
-        h = token_emb + time_emb
-        h = self.transformer(h.permute(1, 0, 2))  # L, B, D
-        return self.output(h.permute(1, 0, 2))    # B, L, V
+        x = self.token_emb(x_t) + self.pos_emb[:, :L, :]
+        t_emb = self.time_mlp(t).unsqueeze(1)  # (B, 1, D)
+        x = x + t_emb
 
+        for block in self.transformer_blocks:
+            x = block(x)
+
+        x = self.norm(x)
+        return self.output(x)  # logits over vocabulary
 
 def train_step(model, optimizer, x_0, vocab_size, mask_token_id, device):
     B, L = x_0.shape
@@ -113,8 +150,8 @@ def tokenize_function(example):
     tokens = tokenizer(example["text"], truncation=True)
     return tokens
 
-dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train").select(range(100_000))
-#dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+#dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train").select(range(100_000))
+dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 
 tokenized_dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names, batched=True, num_proc=8)
 
@@ -133,7 +170,7 @@ def group_texts(examples):
 tokenized_dataset = tokenized_dataset.map(group_texts, batched=True, num_proc=8)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = DiffusionMLM(vocab_size).to(device)
+model = DiTForMLM(vocab_size, 128, 768, 12, 12).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
 
 progress_bar = trange(5000, desc="Training", leave=True)
