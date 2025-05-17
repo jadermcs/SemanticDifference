@@ -60,6 +60,7 @@ def load_data(datasets, split="train"):
 
     return Dataset.from_list(processed_data)
 
+
 def tokenize(sentence, tokenizer):
     return tokenizer(
         sentence,
@@ -67,8 +68,9 @@ def tokenize(sentence, tokenizer):
         return_offsets_mapping=True,
         max_length=MAX_LENGTH,
         padding="max_length",
-        return_tensors="pt"
+        return_tensors="pt",
     )
+
 
 def align(examples, tokenizer):
     inputs = tokenize(examples["sentences"], tokenizer)
@@ -98,7 +100,9 @@ def align(examples, tokenizer):
 
 def preprocess_function(examples, tokenizer):
     """Tokenize input sentences and optionally process supersense labels."""
-    examples["sentences"] = f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}"
+    examples["sentences"] = (
+        f"{examples['sentence1']} {tokenizer.sep_token} {examples['sentence2']}"
+    )
     return examples
 
 
@@ -116,12 +120,11 @@ class MultiTaskModelOutput(ModelOutput):
 
 
 class CustomMultiTaskModel(ModernBertPreTrainedModel):
-
     def __init__(self, config):
         super().__init__(config)
         self.config = config
         self.num_labels = config.num_labels
-        self.model = AutoModel(config)  # Or your specific base model
+        self.model = AutoModel.from_config(config)  # Or your specific base model
         self.head = ModernBertPredictionHead(config)
         self.drop = nn.Dropout(config.classifier_dropout)
         self.token_classifier = nn.Linear(config.hidden_size, config.num_token_labels)
@@ -163,22 +166,24 @@ class CustomMultiTaskModel(ModernBertPreTrainedModel):
             # Create mask for valid positions (masked tokens and non -100 labels)
             valid_mask = token_labels != IGNORE_ID
             # Apply the mask
-            token_labels_masked = token_labels[valid_mask].float()  # match logits' shape
+            token_labels_masked = token_labels[
+                valid_mask
+            ].float()  # match logits' shape
             masked_token_logits = token_logits[valid_mask]
             # Compute loss
             token_loss = self.loss_tok(masked_token_logits, token_labels_masked)
-            log_probs = F.log_softmax(masked_token_logits, dim=-1)   # shape [N, C]
+            log_probs = F.log_softmax(masked_token_logits, dim=-1)  # shape [N, C]
 
             # Create a mask over the allowed senses (multilabel-aware)
-            allowed_mask = token_labels_masked > 0                   # shape [N, C]
+            allowed_mask = token_labels_masked > 0  # shape [N, C]
             num_allowed = allowed_mask.sum(dim=-1, keepdim=True)  # shape [N, 1]
             num_allowed = num_allowed.clamp(min=1)
 
             # Calculate uniform distribution: 1 / |A(w)| for each allowed sense
-            uniform_weights = allowed_mask.float() / num_allowed     # shape [N, C]
+            uniform_weights = allowed_mask.float() / num_allowed  # shape [N, C]
 
             # Compute the regularization loss per example
-            reg_loss = - (uniform_weights * log_probs).sum(dim=-1).mean()  # scalar
+            reg_loss = -(uniform_weights * log_probs).sum(dim=-1).mean()  # scalar
             loss += token_loss + reg_loss
 
         if not return_dict:
@@ -218,7 +223,7 @@ def compute_metrics(pred):
     token_acc = accuracy_score(true_token_labels, pred_token_labels)
 
     # Token classification
-    metrics =  {
+    metrics = {
         "token_accuracy": token_acc,
         "token_f1": token_f1,
         "token_precision": token_precision,
@@ -237,10 +242,9 @@ class MultiTaskTrainer(Trainer):
         with torch.no_grad():
             outputs = model(**inputs, return_dict=True)
 
-        predictions = {
-            "token": outputs["token_logits"].sigmoid()
-        }
+        predictions = {"token": outputs["token_logits"].sigmoid()}
         return None, predictions, label_ids
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -349,7 +353,7 @@ def main():
         greater_is_better=True,
         fp16=args.fp16,
         warmup_steps=WARMUP_STEPS,
-        gradient_accumulation_steps=32//args.batch_size,
+        gradient_accumulation_steps=32 // args.batch_size,
         dataloader_num_workers=4,
         dataloader_pin_memory=True if device.type == "cuda" else False,
         report_to="wandb",
