@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import BertTokenizer
 from datasets import load_dataset
+from tqdm import tqdm
 
 
 # Masking schedule: alpha(t) = exp(-int_0^t beta(s) ds)
@@ -86,10 +87,10 @@ def tokenize_function(example):
     return tokens
 
 
-# dataset = load_dataset(
-#     "HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train"
-# ).select(range(100_000))
-dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+dataset = load_dataset(
+    "HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train"
+).select(range(100_000))
+# dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 
 tokenized_dataset = dataset.map(
     tokenize_function, remove_columns=dataset.column_names, batched=True, num_proc=8
@@ -110,7 +111,7 @@ def group_texts(examples):
 
 
 tokenized_dataset = tokenized_dataset.map(group_texts, batched=True, num_proc=8)
-for step in range(100000):
+for step in tqdm(range(100000)):
     batch = tokenized_dataset.shuffle(seed=42).select(range(32))
     x0 = torch.tensor(batch["input_ids"]).to(device)
     loss = md4_loss(model, x0)
