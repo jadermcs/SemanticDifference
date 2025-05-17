@@ -25,11 +25,11 @@ mask_token_id = tokenizer.mask_token_id
 class MD4Model(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, 256)
+        self.embedding = nn.Embedding(vocab_size, 768)
         self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=256, nhead=4), num_layers=4
+            nn.TransformerEncoderLayer(d_model=256, nhead=12), num_layers=12
         )
-        self.output = nn.Linear(256, vocab_size)
+        self.output = nn.Linear(768, vocab_size)
 
     def forward(self, x, t):
         emb = self.embedding(x)  # [B, L, D]
