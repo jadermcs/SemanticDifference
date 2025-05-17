@@ -27,7 +27,7 @@ class MD4Model(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, 768)
         self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=256, nhead=12), num_layers=12
+            nn.TransformerEncoderLayer(d_model=768, nhead=12), num_layers=12
         )
         self.output = nn.Linear(768, vocab_size)
 
