@@ -74,8 +74,8 @@ def md4_loss(model, x0):
     ce_loss = -(x0_onehot * log_probs).sum(dim=-1)
     masked_loss = ce_loss * mask
 
-    weight = d_alpha_dt(t) / (1 - alpha_t(t))
-    return (weight.view(-1, 1) * masked_loss).sum() / mask.sum().clamp_min(1)
+    weight = (-d_alpha_dt(t) / (1 - alpha_t(t))).view(-1, 1)  # positive
+    return (weight * masked_loss).sum() / mask.sum().clamp_min(1)
 
 
 model = MD4Model(vocab_size).to(device)
